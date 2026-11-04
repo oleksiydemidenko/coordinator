@@ -128,7 +128,8 @@ namespace Coordinator.Editor.Tests
             {
                 assignment = "door-rules",
                 state = "done",
-                checks = new List<CoordinatorCheckResultRecord> { new() { acceptance = "missing", exitCode = 0 } }
+                checks = new List<CoordinatorCheckResultRecord> { new() { acceptance = "missing", exitCode = 0 } },
+                judgments = new List<CoordinatorJudgmentRecord> { new() { text = "Kept the old timer.", step = 4 }, new() { text = "Used ticks.", reason = "The card names no unit.", step = 1 } }
             });
             CoordinatorJson.Write(Path.Combine(project.Paths.TaskFolder("doors"), "door-rules.review.json"), new CoordinatorReviewRecord
             {
@@ -138,7 +139,8 @@ namespace Coordinator.Editor.Tests
 
             var codes = CoordinatorValidation.Validate(CoordinatorWorkspace.Load(project.Root)).Select(diagnostic => diagnostic.Code).ToArray();
 
-            Assert.That(codes, Is.SupersetOf(new[] { "delivery_state", "unknown_acceptance", "acceptance_without_person" }));
+            Assert.That(codes, Is.SupersetOf(new[] { "delivery_state", "unknown_acceptance", "acceptance_without_person", "judgment_incomplete", "judgment_step" }));
+            Assert.That(codes.Count(code => code.StartsWith("judgment_")), Is.EqualTo(2));
         }
     }
 }

@@ -255,6 +255,13 @@ namespace Coordinator.Editor
                 }
                 foreach (var unverified in delivery.unverified.Where(item => item.acceptance != null && !acceptanceIds.Contains(item.acceptance)))
                     Error("unknown_acceptance", file, delivery.assignment, $"Unverified item for acceptance '{unverified.acceptance}', which the assignment does not declare.");
+                foreach (var judgment in delivery.judgments)
+                {
+                    if (string.IsNullOrWhiteSpace(judgment.text) || string.IsNullOrWhiteSpace(judgment.reason))
+                        Error("judgment_incomplete", file, delivery.assignment, "A judgment states what was decided and why.");
+                    if (judgment.step is { } step && (step < 1 || step > assignment.route.Count))
+                        Error("judgment_step", file, delivery.assignment, $"Judgment names route step {step}; the route has {assignment.route.Count} steps.");
+                }
             }
 
             private void ValidateReview(CoordinatorTaskData data, CoordinatorReviewRecord review)

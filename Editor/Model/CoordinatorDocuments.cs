@@ -285,6 +285,15 @@ namespace Coordinator.Editor
         public List<CoordinatorContractRecord> contracts = new();
         public List<string> integrationRequirements = new();
         public List<CoordinatorUnverifiedRecord> unverified = new();
+        public List<CoordinatorJudgmentRecord> judgments = new();
+    }
+
+    [Serializable]
+    public sealed class CoordinatorJudgmentRecord
+    {
+        public string text = string.Empty;
+        public string reason = string.Empty;
+        public int? step;
     }
 
     [Serializable]
