@@ -25,6 +25,16 @@ Coordinator/
 
 Each file has one writer, so branches merge without conflicts.
 
+## Agents
+
+The open Unity Editor serves a transport-neutral API (`CoordinatorAgentApi`) through a local bridge. The MCP server in `Tools~/CoordinatorMcp` only forwards to it, so Coordinator works only with the Editor open:
+
+- `coordinator_status`: project, data and whether the Editor is reachable;
+- `coordinator_query`: `capabilities`, `tasks`, `board`, `task`, `card`, `validate`, `scope` (with `checkout`, checks an executor's worktree);
+- `coordinator_edit`: `create_task`, `update_task`, `set_decision`, `set_assignment`, `remove_assignment`, `cancel_assignment`, `record_review`, `generate_cards`. An edit that adds validation errors is rolled back. `approve_task` always refuses: a person approves in the window, and acceptance names the person who decided.
+
+**Coordinator window > Agents** builds the server (with the .NET SDK until releases ship prebuilt servers) and connects Claude Code or Codex. Copy `Skills~/coordinator-workflow` into the project's skills folder; it explains the workflow and the record format to agents.
+
 ## License
 
 MIT

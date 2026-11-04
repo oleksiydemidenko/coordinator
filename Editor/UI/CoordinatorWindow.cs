@@ -43,6 +43,17 @@ namespace Coordinator.Editor
         private void OnEnable()
         {
             titleContent = new GUIContent("Coordinator");
+            CoordinatorAgentBridge.Changed += Reload;
+            Reload();
+        }
+
+        private void OnDisable()
+        {
+            CoordinatorAgentBridge.Changed -= Reload;
+        }
+
+        private void OnFocus()
+        {
             Reload();
         }
 
@@ -125,11 +136,30 @@ namespace Coordinator.Editor
                 }
                 if (GUILayout.Button("Generate Cards", EditorStyles.toolbarButton, GUILayout.Width(104f)))
                     notice = $"{CoordinatorCards.WriteAll(workspace)} card file(s) written.";
+                var selectedTask = workspace.FindTask(taskFilter);
+                if (selectedTask != null && selectedTask.Task.approval == null && selectedTask.Task.cancelled == null
+                    && GUILayout.Button("Approve…", EditorStyles.toolbarButton, GUILayout.Width(70f)))
+                    Approve(selectedTask);
             }
             GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Agents", EditorStyles.toolbarButton, GUILayout.Width(56f)))
+                CoordinatorAgentsWindow.Open();
             var errors = diagnostics.Count(diagnostic => diagnostic.IsError);
             var warnings = diagnostics.Count - errors;
             showDiagnostics = GUILayout.Toggle(showDiagnostics, $"Diagnostics {errors}/{warnings}", EditorStyles.toolbarButton, GUILayout.Width(110f));
+        }
+
+        private void Approve(CoordinatorTaskData task)
+        {
+            var errors = diagnostics.Count(diagnostic => diagnostic.IsError
+                                                         && diagnostic.File.StartsWith(CoordinatorPaths.RepositoryTaskFolder(task.Task.id) + "/", StringComparison.Ordinal));
+            var message = $"Approve the split of '{task.Task.title}' into {task.Assignments.Count} assignment(s)? Assignments whose decisions and inputs are ready can start."
+                          + (errors > 0 ? $"\n\nThe task has {errors} validation error(s)." : string.Empty);
+            if (!EditorUtility.DisplayDialog("Approve Task", message, "Approve", "Cancel"))
+                return;
+            var result = CoordinatorAgentApi.ApproveByPerson(ProjectRoot, task.Task.id, Environment.UserName);
+            notice = result.Message;
+            Reload();
         }
 
         private void DrawBoard()

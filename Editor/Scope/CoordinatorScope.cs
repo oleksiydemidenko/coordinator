@@ -3,8 +3,40 @@ using System.Linq;
 
 namespace Coordinator.Editor
 {
+    public sealed class CoordinatorScopeReport
+    {
+        public bool BaseIsAncestor { get; internal set; }
+        public List<string> OutsideZone { get; } = new();
+        public List<string> Reserved { get; } = new();
+        public bool Clean => BaseIsAncestor && OutsideZone.Count == 0 && Reserved.Count == 0;
+    }
+
     public static class CoordinatorScope
     {
+        public static CoordinatorScopeReport Check(
+            CoordinatorGit git,
+            CoordinatorProjectRecord project,
+            CoordinatorTaskRecord task,
+            CoordinatorAssignmentRecord assignment,
+            CoordinatorArchitector architector = null)
+        {
+            var baseRevision = Base(task);
+            var report = new CoordinatorScopeReport { BaseIsAncestor = git.IsAncestor(baseRevision, "HEAD") };
+            var outside = Zone(task, assignment, architector).Select(pattern => ":(exclude,glob)" + pattern).Prepend(".").ToArray();
+            report.OutsideZone.AddRange(Paths(git, baseRevision, outside));
+            var reserved = Reserved(project, task).Select(pattern => ":(glob)" + pattern).ToArray();
+            if (reserved.Length > 0)
+                report.Reserved.AddRange(Paths(git, baseRevision, reserved));
+            return report;
+        }
+
+        private static IEnumerable<string> Paths(CoordinatorGit git, string baseRevision, IReadOnlyCollection<string> pathspecs)
+        {
+            var changed = git.Run(new[] { "diff", "--no-renames", "--name-only", baseRevision, "--" }.Concat(pathspecs).ToArray()).Output;
+            var untracked = git.Run(new[] { "ls-files", "--others", "--exclude-standard", "--" }.Concat(pathspecs).ToArray()).Output;
+            return (changed + "\n" + untracked).Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0).Distinct().OrderBy(line => line, System.StringComparer.Ordinal);
+        }
+
         public static IReadOnlyList<string> AuthoredZone(CoordinatorAssignmentRecord assignment, CoordinatorArchitector architector = null)
         {
             var layerPatterns = architector == null

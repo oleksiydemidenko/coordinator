@@ -1,0 +1,157 @@
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
+using UnityEditor;
+using UnityEngine;
+
+namespace Coordinator.Editor
+{
+    [InitializeOnLoad]
+    public static class CoordinatorAgentBridge
+    {
+        private const int RequestTimeoutMilliseconds = 120000;
+        private static readonly ConcurrentQueue<Action> Pending = new();
+        private static TcpListener listener;
+        private static bool started;
+        private static string token;
+
+        static CoordinatorAgentBridge()
+        {
+            if (Application.isBatchMode)
+                return;
+            AssemblyReloadEvents.beforeAssemblyReload += Stop;
+            EditorApplication.quitting += Stop;
+            EditorApplication.update += Tick;
+        }
+
+        public static event Action Changed;
+        public static int Port { get; private set; }
+        public static string StatePath => Path.Combine(CoordinatorAgentApi.DefaultRoot, "Library", "Coordinator", "agent-bridge.json");
+
+        private static void Start()
+        {
+            token = NewToken();
+            listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            Port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            Directory.CreateDirectory(Path.GetDirectoryName(StatePath));
+            File.WriteAllText(StatePath, new JObject { ["port"] = Port, ["token"] = token }.ToString());
+            new Thread(() => Accept(listener)) { IsBackground = true, Name = "Coordinator agent bridge" }.Start();
+        }
+
+        private static void Stop()
+        {
+            listener?.Stop();
+            listener = null;
+            Port = 0;
+            if (File.Exists(StatePath))
+                File.Delete(StatePath);
+        }
+
+        private static void Accept(TcpListener server)
+        {
+            try
+            {
+                while (true)
+                {
+                    var client = server.AcceptTcpClient();
+                    new Thread(() => Serve(client)) { IsBackground = true }.Start();
+                }
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        private static void Serve(TcpClient client)
+        {
+            using (client)
+            using (var stream = client.GetStream())
+            using (var reader = new StreamReader(stream, new UTF8Encoding(false)))
+            using (var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" })
+            {
+                var line = reader.ReadLine();
+                if (line != null)
+                    writer.WriteLine(Answer(line));
+            }
+        }
+
+        private static string Answer(string line)
+        {
+            JObject request;
+            try
+            {
+                request = JObject.Parse(line);
+            }
+            catch (Exception exception)
+            {
+                return CoordinatorAgentResult.Fail("invalid_parameters", exception.Message).ToJson();
+            }
+            if ((string)request["token"] != token)
+                return CoordinatorAgentResult.Fail("unauthorized", "Wrong bridge token.").ToJson();
+            var tool = (string)request["tool"];
+            var parameters = request["parameters"] as JObject ?? new JObject();
+            var completion = new TaskCompletionSource<string>();
+            var claimed = 0;
+            Pending.Enqueue(() =>
+            {
+                if (Interlocked.Exchange(ref claimed, 1) == 0)
+                    completion.SetResult(Run(tool, parameters));
+            });
+            if (completion.Task.Wait(RequestTimeoutMilliseconds))
+                return completion.Task.Result;
+            if (Interlocked.Exchange(ref claimed, 1) == 0)
+                return CoordinatorAgentResult.Fail("editor_timeout", "The Unity Editor did not start this request, and it was cancelled. It may be compiling or paused without Run In Background.").ToJson();
+            return completion.Task.Result;
+        }
+
+        private static string Run(string tool, JObject parameters)
+        {
+            try
+            {
+                var result = tool switch
+                {
+                    "query" => CoordinatorAgentApi.Query(parameters),
+                    "edit" => CoordinatorAgentApi.Edit(parameters),
+                    _ => CoordinatorAgentResult.Fail("unsupported_tool", "Tools: query, edit.")
+                };
+                if (tool == "edit" && result.Success)
+                    Changed?.Invoke();
+                return result.ToJson();
+            }
+            catch (Exception exception)
+            {
+                return CoordinatorAgentResult.Fail("bridge_failed", exception.Message).ToJson();
+            }
+        }
+
+        private static void Tick()
+        {
+            if (!started)
+            {
+                started = true;
+                Start();
+            }
+            while (Pending.TryDequeue(out var action))
+                action();
+        }
+
+        private static string NewToken()
+        {
+            var bytes = new byte[24];
+            using var random = RandomNumberGenerator.Create();
+            random.GetBytes(bytes);
+            return Convert.ToBase64String(bytes);
+        }
+    }
+}
