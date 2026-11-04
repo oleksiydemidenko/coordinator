@@ -257,6 +257,7 @@ namespace Coordinator.Editor
         public string output;
         public string decision;
         public string text;
+        public bool? supplied;
         public string use;
     }
 

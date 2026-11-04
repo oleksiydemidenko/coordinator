@@ -86,8 +86,11 @@ namespace Coordinator.Editor.Tests
 
         public void Dispose()
         {
-            if (Directory.Exists(Root))
-                Directory.Delete(Root, true);
+            if (!Directory.Exists(Root))
+                return;
+            foreach (var file in Directory.GetFiles(Root, "*", SearchOption.AllDirectories))
+                File.SetAttributes(file, FileAttributes.Normal);
+            Directory.Delete(Root, true);
         }
     }
 }

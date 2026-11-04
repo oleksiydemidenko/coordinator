@@ -15,7 +15,17 @@ namespace Coordinator.Editor
 
         public static IReadOnlyList<CoordinatorDiagnostic> Validate(CoordinatorWorkspace workspace, Func<string, bool> pathExists = null)
         {
-            var context = new Context(workspace, pathExists);
+            return Validate(workspace, pathExists == null ? null : (_, path) => pathExists(path));
+        }
+
+        public static IReadOnlyList<CoordinatorDiagnostic> Validate(CoordinatorWorkspace workspace, CoordinatorGit git)
+        {
+            return Validate(workspace, (task, path) => git.PathExists(CoordinatorScope.Base(task), path));
+        }
+
+        public static IReadOnlyList<CoordinatorDiagnostic> Validate(CoordinatorWorkspace workspace, Func<CoordinatorTaskRecord, string, bool> sourceExists)
+        {
+            var context = new Context(workspace, sourceExists);
             context.Diagnostics.AddRange(workspace.LoadDiagnostics);
             context.ValidateProject();
             foreach (var task in workspace.Tasks)
@@ -27,15 +37,15 @@ namespace Coordinator.Editor
         private sealed class Context
         {
             private readonly CoordinatorWorkspace workspace;
-            private readonly Func<string, bool> pathExists;
+            private readonly Func<CoordinatorTaskRecord, string, bool> sourceExists;
             private readonly HashSet<string> checkIds;
             private readonly HashSet<string> disciplineIds;
             private readonly HashSet<string> variableIds;
 
-            public Context(CoordinatorWorkspace workspace, Func<string, bool> pathExists)
+            public Context(CoordinatorWorkspace workspace, Func<CoordinatorTaskRecord, string, bool> sourceExists)
             {
                 this.workspace = workspace;
-                this.pathExists = pathExists;
+                this.sourceExists = sourceExists;
                 checkIds = workspace.Project.checks.Select(check => check.id).ToHashSet(StringComparer.Ordinal);
                 disciplineIds = workspace.Project.disciplines.Select(discipline => discipline.id).ToHashSet(StringComparer.Ordinal);
                 variableIds = workspace.Project.variables.Select(variable => variable.id).ToHashSet(StringComparer.Ordinal);
@@ -124,13 +134,27 @@ namespace Coordinator.Editor
                     Error("missing_discipline", file, subject, "An assignment names at least one discipline.");
                 foreach (var layer in assignment.layers.Where(layer => !LayerRoles.Contains(layer.role)))
                     Error("layer_role", file, subject, $"Layer '{layer.path}' has role '{layer.role}'; expected location, reads or zone.");
+                foreach (var layer in assignment.layers)
+                {
+                    if (workspace.Architector == null)
+                    {
+                        if (layer.role == "zone")
+                            Error("layer_zone_without_architector", file, subject, $"Layer '{layer.path}' is a zone, but the project has no Architector folder to resolve it.");
+                    }
+                    else if (workspace.Architector.FindByPath(layer.path) == null)
+                        Error("unknown_layer", file, subject, $"Layer '{layer.path}' does not exist in Architector.");
+                    else if (layer.role == "zone" && workspace.Architector.FindByPath(layer.path).ScopeFolders.Count == 0)
+                        Error("layer_zone_empty", file, subject, $"Layer '{layer.path}' has no scope folders to use as a zone.");
+                }
+                var zone = CoordinatorScope.AuthoredZone(assignment, workspace.Architector);
 
                 Ids(file, "output", assignment.outputs.Select(output => output.id));
                 Ids(file, "acceptance", assignment.acceptance.Select(acceptance => acceptance.id));
                 Patterns(file, "write zone", assignment.writeZone);
-                if (assignment.writeZone.Count == 0 && assignment.layers.All(layer => layer.role != "zone"))
+                Patterns(file, "layer zone", zone.Except(assignment.writeZone));
+                if (zone.Count == 0)
                     Error("empty_write_zone", file, subject, "An assignment has a write zone.");
-                foreach (var pattern in assignment.writeZone)
+                foreach (var pattern in zone)
                 {
                     var covering = reserved.FirstOrDefault(reservedPattern => CoordinatorGlob.Covers(reservedPattern, pattern));
                     if (covering != null)
@@ -143,7 +167,7 @@ namespace Coordinator.Editor
                         Error("output_kind", file, output.id, $"Output kind '{output.kind}' is not code, asset, configuration or document.");
                     if (output.paths.Count == 0)
                         Error("output_without_paths", file, output.id, "An output names its paths.");
-                    foreach (var path in output.paths.Where(path => !assignment.writeZone.Any(zone => CoordinatorGlob.Covers(zone, path))))
+                    foreach (var path in output.paths.Where(path => !zone.Any(pattern => CoordinatorGlob.Covers(pattern, path))))
                         Error("output_outside_zone", file, output.id, $"Output path '{path}' is not inside the write zone.");
                 }
 
@@ -173,8 +197,8 @@ namespace Coordinator.Editor
                     case CoordinatorInputKinds.Source:
                         if (string.IsNullOrEmpty(input.path))
                             Error("input_missing", file, subject, "A source input names its path.");
-                        else if (pathExists != null && !pathExists(input.path))
-                            Error("input_missing", file, subject, $"Source input '{input.path}' does not exist.");
+                        else if (sourceExists != null && !sourceExists(data.Task, input.path))
+                            Error("input_missing", file, subject, $"Source input '{input.path}' does not exist at the task base {CoordinatorScope.Base(data.Task)}.");
                         break;
                     case CoordinatorInputKinds.Output:
                         if (!outputs.Contains((input.assignment, input.output)))
@@ -325,16 +349,37 @@ namespace Coordinator.Editor
                     .SelectMany(data => data.Assignments.Where(assignment => assignment.cancelled == null)
                         .Select(assignment => (data, assignment)))
                     .ToArray();
+                var architector = workspace.Architector;
                 for (var i = 0; i < open.Length; i++)
                 for (var j = i + 1; j < open.Length; j++)
                 {
                     var left = open[i];
                     var right = open[j];
-                    foreach (var leftPattern in left.assignment.writeZone)
-                    foreach (var rightPattern in right.assignment.writeZone.Where(rightPattern => CoordinatorGlob.Overlaps(leftPattern, rightPattern)))
-                        Error("zone_overlap", left.data.FilePath(left.assignment.id + CoordinatorPaths.AssignmentSuffix), left.assignment.id,
-                            $"Write zone '{leftPattern}' overlaps '{rightPattern}' of {right.data.Task.id}/{right.assignment.id}.");
+                    var file = left.data.FilePath(left.assignment.id + CoordinatorPaths.AssignmentSuffix);
+                    var other = $"{right.data.Task.id}/{right.assignment.id}";
+                    foreach (var leftPattern in CoordinatorScope.AuthoredZone(left.assignment, architector))
+                    foreach (var rightPattern in CoordinatorScope.AuthoredZone(right.assignment, architector).Where(rightPattern => CoordinatorGlob.Overlaps(leftPattern, rightPattern)))
+                        Error("zone_overlap", file, left.assignment.id, $"Write zone '{leftPattern}' overlaps '{rightPattern}' of {other}.");
+                    if (architector == null)
+                        continue;
+                    var leftLayers = TouchedLayers(left.assignment, architector);
+                    var rightLayers = TouchedLayers(right.assignment, architector);
+                    foreach (var shared in leftLayers.Intersect(rightLayers))
+                        Warning("layer_shared", file, left.assignment.id, $"Layer '{shared.Path}' is also touched by {other}.");
+                    foreach (var leftLayer in leftLayers.Except(rightLayers))
+                    foreach (var rightLayer in rightLayers.Except(leftLayers).Where(rightLayer => architector.Connected(leftLayer, rightLayer)))
+                        Warning("layers_connected", file, left.assignment.id,
+                            $"Layer '{leftLayer.Path}' is connected to '{rightLayer.Path}', touched by {other}; agree the contract between them first.");
                 }
+            }
+
+            private static CoordinatorArchitectorLayer[] TouchedLayers(CoordinatorAssignmentRecord assignment, CoordinatorArchitector architector)
+            {
+                return assignment.layers.Where(layer => layer.role == "location" || layer.role == "zone")
+                    .Select(layer => architector.FindByPath(layer.path))
+                    .Where(layer => layer != null)
+                    .Distinct()
+                    .ToArray();
             }
 
             private void Schema(string file, string subject, int version)

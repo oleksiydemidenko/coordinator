@@ -35,6 +35,7 @@ namespace Coordinator.Editor
         public CoordinatorProjectRecord Project { get; private set; } = new();
         public List<CoordinatorTaskData> Tasks { get; } = new();
         public List<CoordinatorDiagnostic> LoadDiagnostics { get; } = new();
+        public CoordinatorArchitector Architector { get; private set; }
 
         public CoordinatorTaskData FindTask(string id) => Tasks.FirstOrDefault(task => task.Task.id == id);
 
@@ -42,6 +43,9 @@ namespace Coordinator.Editor
         {
             var workspace = new CoordinatorWorkspace(new CoordinatorPaths(projectRoot));
             workspace.LoadAll();
+            workspace.Architector = CoordinatorArchitector.Load(workspace.Paths.ProjectRoot);
+            foreach (var problem in workspace.Architector?.Problems ?? new List<string>())
+                workspace.LoadDiagnostics.Add(new CoordinatorDiagnostic("architector_unreadable", CoordinatorSeverities.Warning, CoordinatorArchitector.RootFolder, string.Empty, problem));
             return workspace;
         }
 
