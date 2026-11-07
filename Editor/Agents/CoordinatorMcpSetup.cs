@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Threading.Tasks;
 using UnityEditor.PackageManager;
 using UnityEngine;
 
@@ -34,14 +33,15 @@ namespace Coordinator.Editor
     public static class CoordinatorMcpSetup
     {
         private const int CliTimeoutMilliseconds = 30000;
-        private const int BuildTimeoutMilliseconds = 300000;
 
         public static string Version => PackageInfo.FindForAssembly(typeof(CoordinatorMcpSetup).Assembly)?.version ?? "0.0.0";
 
         public static string PackageRoot => PackageInfo.FindForAssembly(typeof(CoordinatorMcpSetup).Assembly)?.resolvedPath;
 
-        public static string BinaryPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".coordinator", "mcp", Version, "coordinator-mcp" + (Application.platform == RuntimePlatform.WindowsEditor ? ".exe" : string.Empty));
+        public static string ServerRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".coordinator", "mcp");
+
+        public static string BinaryPath => Path.Combine(ServerRoot, Version,
+            "coordinator-mcp" + (Application.platform == RuntimePlatform.WindowsEditor ? ".exe" : string.Empty));
 
         public static bool IsInstalled => File.Exists(BinaryPath);
 
@@ -49,19 +49,16 @@ namespace Coordinator.Editor
 
         public static string CodexCommand => $"codex mcp add coordinator -- \"{BinaryPath}\" --project \"{CoordinatorAgentApi.DefaultRoot}\"";
 
-        public static Task<string> BuildAsync()
+        public static string RegisteredBinary(CoordinatorMcpClient client)
         {
-            var project = PackageRoot == null ? null : Path.Combine(PackageRoot, "Tools~", "CoordinatorMcp");
-            var output = Path.GetDirectoryName(BinaryPath);
-            return Task.Run(() =>
-            {
-                if (project == null || !File.Exists(Path.Combine(project, "CoordinatorMcp.csproj")))
-                    return "The server project was not found in the package.";
-                var (success, text) = Run("dotnet", $"publish \"{project}\" -c Release -p:Version={Version} -o \"{output}\"", project, BuildTimeoutMilliseconds);
-                if (!success)
-                    return "dotnet publish failed. The .NET SDK is needed until Coordinator ships prebuilt servers.\n" + text;
-                return File.Exists(BinaryPath) ? null : "The build finished but the server binary is missing: " + BinaryPath;
-            });
+            var cli = FindCli(client.Command);
+            if (cli == null)
+                return null;
+            var (success, output) = Run(cli, "mcp get coordinator", CoordinatorAgentApi.DefaultRoot, CliTimeoutMilliseconds);
+            if (!success)
+                return null;
+            var command = System.Text.RegularExpressions.Regex.Match(output.Replace("\\\\", "\\"), @"(?im)^\s*command:\s*(.+)$");
+            return command.Success ? command.Groups[1].Value.Trim().Trim('"') : null;
         }
 
         public static (bool connected, string details) Check(CoordinatorMcpClient client)

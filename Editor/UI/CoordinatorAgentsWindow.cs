@@ -8,7 +8,7 @@ namespace Coordinator.Editor
     public sealed class CoordinatorAgentsWindow : EditorWindow
     {
         private readonly Dictionary<string, (bool connected, string details)> clients = new();
-        private Task<string> build;
+        private Task<string> install;
         private string message = string.Empty;
         private Vector2 scroll;
 
@@ -32,10 +32,10 @@ namespace Coordinator.Editor
 
         private void Poll()
         {
-            if (build is not { IsCompleted: true })
+            if (install is not { IsCompleted: true })
                 return;
-            message = build.Result ?? "Server built: " + CoordinatorMcpSetup.BinaryPath;
-            build = null;
+            message = install.Result ?? "Server installed: " + CoordinatorMcpSetup.BinaryPath;
+            install = null;
             RefreshClients();
             Repaint();
         }
@@ -52,15 +52,15 @@ namespace Coordinator.Editor
             scroll = EditorGUILayout.BeginScrollView(scroll);
             EditorGUILayout.LabelField("MCP Server", EditorStyles.boldLabel);
             EditorGUILayout.LabelField("Version", CoordinatorMcpSetup.Version);
-            EditorGUILayout.LabelField("Binary", CoordinatorMcpSetup.IsInstalled ? CoordinatorMcpSetup.BinaryPath : "Not built");
+            EditorGUILayout.LabelField("Binary", CoordinatorMcpSetup.IsInstalled ? CoordinatorMcpSetup.BinaryPath : "Not installed");
             EditorGUILayout.LabelField("Editor bridge", CoordinatorAgentBridge.Port > 0 ? "Listening on port " + CoordinatorAgentBridge.Port : "Not running");
-            using (new EditorGUI.DisabledScope(build != null))
-                if (GUILayout.Button(build != null ? "Building…" : CoordinatorMcpSetup.IsInstalled ? "Rebuild Server" : "Build Server"))
+            using (new EditorGUI.DisabledScope(install != null))
+                if (GUILayout.Button(install != null ? "Installing…" : CoordinatorMcpSetup.IsInstalled ? "Reinstall Server" : "Install Server"))
                 {
                     message = string.Empty;
-                    build = CoordinatorMcpSetup.BuildAsync();
+                    install = CoordinatorServerInstall.InstallAsync();
                 }
-            EditorGUILayout.HelpBox("Until Coordinator has releases, the server is built from the package with the .NET SDK. The server only forwards to this open Editor.", MessageType.None);
+            EditorGUILayout.HelpBox($"The server is downloaded from Coordinator release {CoordinatorServerInstall.Tag} and checked against its SHA-256. When the package version changes, connected agents move to the matching server by themselves. The server only forwards to this open Editor.", MessageType.None);
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Clients", EditorStyles.boldLabel);
@@ -70,7 +70,7 @@ namespace Coordinator.Editor
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     EditorGUILayout.LabelField(client.DisplayName, state.connected ? "Connected" : "Not connected");
-                    using (new EditorGUI.DisabledScope(!CoordinatorMcpSetup.IsInstalled || build != null))
+                    using (new EditorGUI.DisabledScope(!CoordinatorMcpSetup.IsInstalled || install != null))
                     {
                         if (GUILayout.Button(state.connected ? "Reconnect" : "Connect", GUILayout.Width(90f)))
                             Report(CoordinatorMcpSetup.Connect(client), client.DisplayName + " connected. Restart it to load the server.");
