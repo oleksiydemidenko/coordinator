@@ -36,6 +36,7 @@ namespace Coordinator.Editor.Tests
             project.Project.rules.Add(new CoordinatorRuleRecord { id = "no-unity", text = "Do not open Unity.", environments = new List<string> { CoordinatorEnvironments.Worktree } });
             project.Project.rules.Add(new CoordinatorRuleRecord { id = "commit", text = "Stage owned paths only." });
             project.Assignments[1].executor.environment = CoordinatorEnvironments.Editor;
+            project.Assignments[1].acceptance.Add(new CoordinatorAcceptanceRecord { id = "listen", text = "The designer listened and is happy." });
             var workspace = project.Save();
             var data = workspace.FindTask("doors");
 
@@ -44,6 +45,7 @@ namespace Coordinator.Editor.Tests
 
             Assert.That(worktree, Does.Contain("Do not open Unity.").And.Contain("Stage owned paths only.").And.Contain("Executor environment: `worktree`"));
             Assert.That(editor, Does.Not.Contain("Do not open Unity.").And.Contain("Stage owned paths only.").And.Contain("Executor environment: `editor`"));
+            Assert.That(editor, Does.Contain("- **listen**: The designer listened and is happy."));
         }
 
         [Test]

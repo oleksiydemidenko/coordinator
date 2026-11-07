@@ -194,6 +194,8 @@ namespace Coordinator.Editor
                     text.Line($"- **{item.id}**: `{Command(item.command, variables)}`. {item.text}");
                 else if (!string.IsNullOrEmpty(item.testFilter))
                     text.Line($"- **{item.id}**: tests `{item.testFilter}`. {item.text}");
+                else if (item.check == null && (item.checks == null || item.checks.Count == 0))
+                    text.Line($"- **{item.id}**: {item.text}");
                 foreach (var checkId in (item.checks ?? new List<string>()).Concat(item.check == null ? Array.Empty<string>() : new[] { item.check }))
                 {
                     if (!listedChecks.Add(checkId))
