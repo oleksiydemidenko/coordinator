@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using NUnit.Framework;
 
@@ -23,7 +24,26 @@ namespace Coordinator.Editor.Tests
             Assert.That(card, Does.Contain("git diff --no-renames --name-only abc1234 -- . ':(exclude,glob)Assets/Scripts/Doors/**'"));
             Assert.That(card, Does.Contain("`judgments`").And.Contain("Do not log your actions"));
             Assert.That(card, Does.Contain("git show develop:Coordinator/Tasks/doors/Cards/door-rules.md"));
+            Assert.That(card, Does.Contain("never push").And.Contain("git switch integration/doors\ngit merge --no-ff task/door-rules"));
+            Assert.That(card, Does.Contain("Never merge into `develop`"));
             Assert.That(card, Does.Not.Contain("\r"));
+        }
+
+        [Test]
+        public void ACardRepeatsOnlyTheRulesOfItsEnvironment()
+        {
+            using var project = new CoordinatorTestProject();
+            project.Project.rules.Add(new CoordinatorRuleRecord { id = "no-unity", text = "Do not open Unity.", environments = new List<string> { CoordinatorEnvironments.Worktree } });
+            project.Project.rules.Add(new CoordinatorRuleRecord { id = "commit", text = "Stage owned paths only." });
+            project.Assignments[1].executor.environment = CoordinatorEnvironments.Editor;
+            var workspace = project.Save();
+            var data = workspace.FindTask("doors");
+
+            var worktree = CoordinatorCards.Assignment(workspace.Project, data, data.Assignments[0]);
+            var editor = CoordinatorCards.Assignment(workspace.Project, data, data.Assignments[1]);
+
+            Assert.That(worktree, Does.Contain("Do not open Unity.").And.Contain("Stage owned paths only.").And.Contain("Executor environment: `worktree`"));
+            Assert.That(editor, Does.Not.Contain("Do not open Unity.").And.Contain("Stage owned paths only.").And.Contain("Executor environment: `editor`"));
         }
 
         [Test]

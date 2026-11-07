@@ -262,7 +262,7 @@ namespace Coordinator.Editor
                 CoordinatorAssignmentStates.Returned => new Color(0.95f, 0.6f, 0.3f),
                 CoordinatorAssignmentStates.InProgress => new Color(0.45f, 0.7f, 1f),
                 CoordinatorAssignmentStates.Delivered => new Color(0.75f, 0.6f, 1f),
-                CoordinatorAssignmentStates.Accepted or CoordinatorAssignmentStates.Closed => new Color(0.45f, 0.85f, 0.5f),
+                CoordinatorAssignmentStates.Accepted or CoordinatorAssignmentStates.Merged or CoordinatorAssignmentStates.Closed => new Color(0.45f, 0.85f, 0.5f),
                 _ => EditorGUIUtility.isProSkin ? new Color(0.85f, 0.85f, 0.85f) : new Color(0.2f, 0.2f, 0.2f)
             };
         }

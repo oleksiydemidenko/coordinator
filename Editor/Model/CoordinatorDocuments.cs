@@ -10,6 +10,17 @@ namespace Coordinator.Editor
         public const string Lead = "lead";
     }
 
+    public static class CoordinatorEnvironments
+    {
+        public const string Worktree = "worktree";
+        public const string Editor = "editor";
+
+        public static bool IsKnown(string environment) => environment == Worktree || environment == Editor;
+
+        public static bool Applies(List<string> environments, string environment) =>
+            environments == null || environments.Contains(environment);
+    }
+
     public static class CoordinatorDecisionStates
     {
         public const string Open = "open";
@@ -77,6 +88,7 @@ namespace Coordinator.Editor
         public string generated;
         public string runBy = CoordinatorRunBy.Executor;
         public string limits;
+        public List<string> environments;
     }
 
     [Serializable]
@@ -84,6 +96,7 @@ namespace Coordinator.Editor
     {
         public string id = string.Empty;
         public string text = string.Empty;
+        public List<string> environments;
     }
 
     [Serializable]
@@ -239,6 +252,7 @@ namespace Coordinator.Editor
     {
         public string handle;
         public string branch = string.Empty;
+        public string environment = string.Empty;
     }
 
     [Serializable]

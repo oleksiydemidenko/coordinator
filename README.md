@@ -2,9 +2,9 @@
 
 Agent task cards for Unity projects. In development; nothing is released yet.
 
-A lead splits a task from the technical design into assignments for several executors, each a person working with an agent. Every assignment states what to read, its inputs and outputs, the only paths it may change, its route and its acceptance. Shared decisions are made before parallel work starts. Progress is computed from git, so no server is needed.
+Coordinator is for parallel work of agents on one task, in one discipline or several. A lead splits a task from the technical design into assignments; each is taken by an operator, the person who runs an executor agent for it. Every assignment states what to read, its inputs and outputs, the only paths it may change, its route and its acceptance. Shared decisions are made before parallel work starts. Progress is computed from git, so no server is needed.
 
-Coordinator does not launch or supervise agents. Executors work where they like, usually in their own git worktree without Unity; they read a generated Markdown card, check their write zone with the git commands in it and write a small delivery file. The lead reviews and accepts in the Editor.
+Coordinator does not launch or supervise agents. An executor works in its own git worktree without Unity or in its operator's checkout with the Unity Editor open, as its card states; it reads a generated Markdown card, checks its write zone with the git commands in it and writes a small delivery file. The operator hands the card in, the lead reviews every card in the Editor, the executor merges an accepted card into the task branch, and only the lead's approval lets the task branch into the target branch.
 
 It is a sibling of [Architector](https://github.com/oleksiydemidenko/architector). With an `Architector` folder in the project, cards can name layers; Coordinator reads those files and has no assembly reference to Architector.
 

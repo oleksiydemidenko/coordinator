@@ -69,7 +69,10 @@ namespace Coordinator.Editor
                     if (string.IsNullOrEmpty(check.command) == (check.generated != "scope"))
                         Error("check_command", file, check.id, "A check has either a command or generated: \"scope\".");
                     Variables(file, check.id, check.command);
+                    Environments(file, check.id, check.environments);
                 }
+                foreach (var rule in project.rules)
+                    Environments(file, rule.id, rule.environments);
             }
 
             public void ValidateTask(CoordinatorTaskData data)
@@ -80,6 +83,9 @@ namespace Coordinator.Editor
                 Id(file, "task", task.id);
                 Required(file, task.id, "lead", task.lead);
                 Required(file, task.id, "targetBranch", task.targetBranch);
+                Required(file, task.id, "integrationBranch", task.integrationBranch);
+                if (!string.IsNullOrEmpty(task.integrationBranch) && task.integrationBranch == task.targetBranch)
+                    Error("integration_is_target", file, task.id, "The task branch differs from the target branch: executors merge into the task branch, and only the lead's approval lets it into the target branch.");
                 Required(file, task.id, "base.branch", task.baseRevision.branch);
                 Patterns(file, "reserved path", task.reservedPaths.Select(reserved => reserved.pattern));
                 Ids(file, "decision", task.decisions.Select(decision => decision.id));
@@ -128,6 +134,9 @@ namespace Coordinator.Editor
                 Schema(file, subject, assignment.schemaVersion);
                 Required(file, subject, "goal", assignment.goal);
                 Required(file, subject, "executor.branch", assignment.executor?.branch);
+                var environment = assignment.executor?.environment;
+                if (!CoordinatorEnvironments.IsKnown(environment))
+                    Error("executor_environment", file, subject, $"executor.environment '{environment}' is not worktree or editor.");
                 foreach (var discipline in assignment.disciplines.Where(discipline => !disciplineIds.Contains(discipline)))
                     Error("unknown_discipline", file, subject, $"Discipline '{discipline}' is not declared in the project file.");
                 if (assignment.disciplines.Count == 0)
@@ -180,6 +189,13 @@ namespace Coordinator.Editor
                 var acceptanceIds = assignment.acceptance.Select(acceptance => acceptance.id).ToHashSet(StringComparer.Ordinal);
                 Route(file, subject, assignment.route, acceptanceIds);
                 Acceptance(file, subject, assignment.acceptance);
+                foreach (var item in assignment.acceptance.Where(item => item.runBy == CoordinatorRunBy.Executor))
+                    foreach (var reference in (item.checks ?? new List<string>()).Concat(item.check == null ? Array.Empty<string>() : new[] { item.check }))
+                    {
+                        var check = workspace.Project.checks.FirstOrDefault(candidate => candidate.id == reference);
+                        if (check != null && !CoordinatorEnvironments.Applies(check.environments, environment))
+                            Error("check_environment", file, $"{subject}/{item.id}", $"Check '{reference}' does not apply to an executor working in '{environment}'.");
+                    }
                 if (assignment.acceptance.Count == 0)
                     Error("missing_acceptance", file, subject, "An assignment states how it is accepted.");
             }
@@ -425,6 +441,16 @@ namespace Coordinator.Editor
             {
                 if (runBy != CoordinatorRunBy.Executor && runBy != CoordinatorRunBy.Lead)
                     Error("run_by", file, subject, $"runBy '{runBy}' is not executor or lead.");
+            }
+
+            private void Environments(string file, string subject, List<string> environments)
+            {
+                if (environments == null)
+                    return;
+                if (environments.Count == 0)
+                    Error("environments_empty", file, subject, "Leave environments out to apply everywhere, or name worktree, editor or both.");
+                foreach (var environment in environments.Where(environment => !CoordinatorEnvironments.IsKnown(environment)))
+                    Error("unknown_environment", file, subject, $"Environment '{environment}' is not worktree or editor.");
             }
 
             private void Variables(string file, string subject, string command)

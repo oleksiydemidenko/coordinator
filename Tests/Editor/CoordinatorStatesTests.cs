@@ -92,8 +92,43 @@ namespace Coordinator.Editor.Tests
             Review(second, "accepted");
             Assert.That(States().Find("door-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Accepted));
 
-            Git("-c", "user.name=Test", "-c", "user.email=test@example.com", "merge", "-q", "--no-edit", "task/door-rules");
+            Git("branch", "integration/doors", project.Task.baseRevision.commit);
+            MergeInto("integration/doors", "task/door-rules");
+            Assert.That(States().Find("door-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Merged));
+
+            MergeInto("develop", "integration/doors");
             Assert.That(States().Find("door-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Closed));
+        }
+
+        [Test]
+        public void ADependentCardWaitsUntilTheAcceptedOutputIsInTheTaskBranch()
+        {
+            project.Assignments[1].dependsOn.decisions.Clear();
+            project.Assignments[1].dependsOn.outputs.Add(new CoordinatorOutputRef { assignment = "door-rules", output = "door-rules-code" });
+            project.Save();
+            Commit("light waits for doors");
+            Git("branch", "integration/doors");
+            Assert.That(States().Find("light-rules").BlockedBy.Single(), Does.Contain("is not accepted"));
+
+            Git("checkout", "-q", "-b", "task/door-rules");
+            project.WriteFile("Assets/Scripts/Doors/Door.cs", "class Door {}");
+            Deliver("delivered");
+            var delivered = Git("rev-parse", "HEAD").Trim();
+            Git("checkout", "-q", "develop");
+            Review(delivered, "accepted");
+            Assert.That(States().Find("light-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Blocked));
+            Assert.That(States().Find("light-rules").BlockedBy.Single(), Does.Contain("not merged into the task branch"));
+
+            MergeInto("integration/doors", "task/door-rules");
+            Assert.That(States().Find("door-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Merged));
+            Assert.That(States().Find("light-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Ready));
+        }
+
+        private void MergeInto(string target, string source)
+        {
+            Git("checkout", "-q", target);
+            Git("-c", "user.name=Test", "-c", "user.email=test@example.com", "merge", "-q", "--no-ff", "--no-edit", source);
+            Git("checkout", "-q", "develop");
         }
 
         [Test]

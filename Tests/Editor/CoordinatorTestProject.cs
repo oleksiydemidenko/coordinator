@@ -31,6 +31,7 @@ namespace Coordinator.Editor.Tests
                 title = "Doors and lights",
                 lead = "lead",
                 targetBranch = "develop",
+                integrationBranch = "integration/doors",
                 baseRevision = new CoordinatorBaseRecord { branch = "coordination/doors-start", commit = "abc1234" },
                 decisions = new List<CoordinatorDecisionRecord>
                 {
@@ -58,7 +59,7 @@ namespace Coordinator.Editor.Tests
                 id = id,
                 title = id,
                 disciplines = new List<string> { "code" },
-                executor = new CoordinatorExecutorRecord { branch = "task/" + id },
+                executor = new CoordinatorExecutorRecord { branch = "task/" + id, environment = CoordinatorEnvironments.Worktree },
                 goal = "Rules for " + id,
                 outputs = new List<CoordinatorOutputRecord> { new() { id = id + "-code", kind = "code", paths = new List<string> { folder + "/**" } } },
                 writeZone = new List<string> { folder + "/**", folder + ".meta" },

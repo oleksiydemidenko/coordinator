@@ -32,6 +32,7 @@ namespace Coordinator.Editor
             CoordinatorAssignmentStates.Ready,
             CoordinatorAssignmentStates.Blocked,
             CoordinatorAssignmentStates.Accepted,
+            CoordinatorAssignmentStates.Merged,
             CoordinatorAssignmentStates.Closed,
             CoordinatorAssignmentStates.Draft,
             CoordinatorAssignmentStates.Cancelled

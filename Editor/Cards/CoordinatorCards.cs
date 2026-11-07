@@ -68,9 +68,9 @@ namespace Coordinator.Editor
                     text.Line($"- **{decision.id}** ({decision.state}, {decision.owner}): {decision.question}"
                               + (decision.state == CoordinatorDecisionStates.Decided ? $" Answer: {decision.answer}" : "") + Record(decision.record));
             }
-            text.Blank().Line("## Assignments").Blank().Line("| Assignment | Executor | Branch | Write zone |").Line("| --- | --- | --- | --- |");
+            text.Blank().Line("## Assignments").Blank().Line("| Assignment | Executor | Environment | Branch | Write zone |").Line("| --- | --- | --- | --- | --- |");
             foreach (var assignment in data.Assignments)
-                text.Line($"| [{assignment.title}]({assignment.id}.md) | {assignment.executor?.handle ?? "-"} | `{assignment.executor?.branch}` | {string.Join(", ", assignment.writeZone.Select(pattern => $"`{pattern}`"))} |");
+                text.Line($"| [{assignment.title}]({assignment.id}.md) | {assignment.executor?.handle ?? "-"} | {assignment.executor?.environment} | `{assignment.executor?.branch}` | {string.Join(", ", assignment.writeZone.Select(pattern => $"`{pattern}`"))} |");
             if (task.integration != null)
             {
                 text.Blank().Line("## Integration").Blank();
@@ -101,7 +101,9 @@ namespace Coordinator.Editor
             var text = new Text();
             var baseRevision = CoordinatorScope.Base(task);
             text.Line(Banner).Line($"# {assignment.title}").Blank();
+            var environment = assignment.executor?.environment;
             text.Line($"Task: {task.title} (`{task.id}`). Lead: {task.lead}. Disciplines: {string.Join(", ", assignment.disciplines)}.").Blank();
+            text.Line(Environment(environment)).Blank();
             text.Line($"Work in branch `{assignment.executor?.branch}`, started from `{task.baseRevision.branch}`"
                       + (string.IsNullOrEmpty(task.baseRevision.commit) ? "." : $" (`{Short(task.baseRevision.commit)}`).")
                       + " Read the current version of this card from the lead's branch, not from your checkout:").Blank();
@@ -173,13 +175,14 @@ namespace Coordinator.Editor
             }
 
             var forbidden = assignment.forbidden.Select(item => item.text).Concat(task.forbidden.Select(item => item.text + " (task)")).ToArray();
-            if (forbidden.Length > 0 || project.rules.Count > 0)
+            var rules = project.rules.Where(rule => CoordinatorEnvironments.Applies(rule.environments, environment)).ToArray();
+            if (forbidden.Length > 0 || rules.Length > 0)
             {
                 text.Blank().Line("## Forbidden").Blank();
                 foreach (var item in forbidden)
                     text.Line("- " + item);
-                if (project.rules.Count > 0)
-                    text.Blank().Line("Project rules: " + string.Join(" ", project.rules.Select(rule => rule.text)));
+                if (rules.Length > 0)
+                    text.Blank().Line("Project rules: " + string.Join(" ", rules.Select(rule => rule.text)));
             }
 
             text.Blank().Line("## Acceptance").Blank().Line("You run:").Blank();
@@ -223,8 +226,20 @@ namespace Coordinator.Editor
             text.Line($"Write `{CoordinatorPaths.RepositoryDeliveryPath(task.id, assignment.id)}` in the documented format: set `state` to `inProgress` when you start and `delivered` in your final commit. "
                       + "Report the checks you ran with exit codes and results, the public contracts, the open integration requirements, what stays unverified, "
                       + "and in `judgments` every choice this card did not settle, with its reason. Do not log your actions. Do not write the commit SHA: Coordinator reads it from git.");
+            text.Blank().Line("## Hand-In And Merge").Blank();
+            text.Line("1. Your operator, the person who runs you, checks the result and hands this card in to the lead. Pushing and pull requests are the operator's act: never push.");
+            text.Line("2. The lead reviews the card and accepts or returns it. A returned card comes back with findings; fix them in your branch and deliver again.");
+            text.Line($"3. When the lead has accepted it, merge your branch into the task branch `{task.integrationBranch}`. Never merge into `{task.targetBranch}`: only the lead's approval of the whole task branch lets it in.");
+            text.Blank().Code($"git switch {task.integrationBranch}\ngit merge --no-ff {assignment.executor?.branch}");
             return text.ToString();
         }
+
+        private static string Environment(string environment) => environment switch
+        {
+            CoordinatorEnvironments.Worktree => "Executor environment: `worktree`, your own git worktree without Unity. Checks that need Unity are run by the lead.",
+            CoordinatorEnvironments.Editor => "Executor environment: `editor`, your operator's checkout with the Unity Editor open. You work through the Editor's tools.",
+            _ => $"Executor environment: `{environment}`, not declared correctly."
+        };
 
         private static string Command(string command, ISet<string> variables)
         {

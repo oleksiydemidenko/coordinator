@@ -24,6 +24,38 @@ namespace Coordinator.Editor.Tests
         }
 
         [Test]
+        public void AnExecutorDeclaresWhereItWorks()
+        {
+            project.Assignments[0].executor.environment = string.Empty;
+            project.Assignments[1].executor.environment = "cloud";
+
+            Assert.That(Codes().Count(code => code == "executor_environment"), Is.EqualTo(2));
+        }
+
+        [Test]
+        public void ATaskBranchIsRequiredAndDiffersFromTheTarget()
+        {
+            project.Task.integrationBranch = "develop";
+            Assert.That(Codes(), Does.Contain("integration_is_target"));
+
+            project.Task.integrationBranch = null;
+            Assert.That(Codes(), Does.Contain("missing_field"));
+        }
+
+        [Test]
+        public void ACheckForAnotherEnvironmentCannotBeAnExecutorsAcceptance()
+        {
+            project.Project.checks[0].environments = new List<string> { CoordinatorEnvironments.Worktree };
+            project.Project.rules.Add(new CoordinatorRuleRecord { id = "no-unity", text = "Do not open Unity.", environments = new List<string>() });
+            project.Assignments[1].executor.environment = CoordinatorEnvironments.Editor;
+
+            var codes = Codes();
+
+            Assert.That(codes.Count(code => code == "check_environment"), Is.EqualTo(1));
+            Assert.That(codes, Does.Contain("environments_empty"));
+        }
+
+        [Test]
         public void FilesRoundTripByteForByte()
         {
             project.Save();

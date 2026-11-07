@@ -97,7 +97,8 @@ namespace Coordinator.Editor
                 {
                     CoordinatorAssignmentStates.Draft, CoordinatorAssignmentStates.Blocked, CoordinatorAssignmentStates.Ready,
                     CoordinatorAssignmentStates.InProgress, CoordinatorAssignmentStates.Delivered, CoordinatorAssignmentStates.Returned,
-                    CoordinatorAssignmentStates.Accepted, CoordinatorAssignmentStates.Closed, CoordinatorAssignmentStates.Cancelled
+                    CoordinatorAssignmentStates.Accepted, CoordinatorAssignmentStates.Merged, CoordinatorAssignmentStates.Closed,
+                    CoordinatorAssignmentStates.Cancelled
                 },
                 rules = new[]
                 {

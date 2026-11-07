@@ -14,6 +14,7 @@ namespace Coordinator.Editor
         public const string Delivered = "Delivered";
         public const string Returned = "Returned";
         public const string Accepted = "Accepted";
+        public const string Merged = "Merged";
         public const string Closed = "Closed";
         public const string Cancelled = "Cancelled";
     }
@@ -129,7 +130,9 @@ namespace Coordinator.Editor
                 status.AcceptedRevision = status.DeliveredRevision;
                 status.State = git.IsAncestor(status.AcceptedRevision, data.Task.targetBranch)
                     ? CoordinatorAssignmentStates.Closed
-                    : CoordinatorAssignmentStates.Accepted;
+                    : !string.IsNullOrEmpty(data.Task.integrationBranch) && git.IsAncestor(status.AcceptedRevision, data.Task.integrationBranch)
+                        ? CoordinatorAssignmentStates.Merged
+                        : CoordinatorAssignmentStates.Accepted;
             }
             else
                 status.State = CoordinatorAssignmentStates.Delivered;
@@ -158,8 +161,10 @@ namespace Coordinator.Editor
             foreach (var (producer, output) in outputs)
             {
                 var state = statuses.TryGetValue(producer ?? string.Empty, out var producerStatus) ? producerStatus.State : null;
-                if (state != CoordinatorAssignmentStates.Accepted && state != CoordinatorAssignmentStates.Closed)
-                    status.BlockedBy.Add($"output {producer}/{output} is not accepted");
+                if (state != CoordinatorAssignmentStates.Merged && state != CoordinatorAssignmentStates.Closed)
+                    status.BlockedBy.Add(state == CoordinatorAssignmentStates.Accepted
+                        ? $"output {producer}/{output} is accepted but not merged into the task branch"
+                        : $"output {producer}/{output} is not accepted");
             }
             foreach (var resource in assignment.inputs.Where(input => input.kind == CoordinatorInputKinds.Resource && input.supplied != true))
                 status.BlockedBy.Add($"resource not supplied: {resource.text}");
