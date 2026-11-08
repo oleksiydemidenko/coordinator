@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.0
+
+First, test release: the model, validation, git-computed states, cards, agent access and the MCP server are complete; the window is a draft until its final design.
 
 - Data model and files of `Coordinator/`: project, tasks, decisions, assignments, deliveries and reviews.
 - Task validation: ids and references, write zones against reserved paths and against each other, outputs inside zones, inputs, dependency cycles.
