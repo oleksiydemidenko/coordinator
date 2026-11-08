@@ -40,41 +40,125 @@ namespace Coordinator.Editor
 
         private static string ProjectRoot => Directory.GetParent(Application.dataPath)?.FullName ?? Application.dataPath;
 
+        private const double QuietRefreshSeconds = 0.5;
+        [NonSerialized] private CoordinatorDeferredWork refresh;
+        [NonSerialized] private string lastFingerprint;
+
         private void OnEnable()
         {
             titleContent = new GUIContent("Coordinator");
-            CoordinatorAgentBridge.Changed += Reload;
-            Reload();
+            CoordinatorAgentBridge.Changed += OnDataChanged;
+            Reload(false);
         }
 
         private void OnDisable()
         {
-            CoordinatorAgentBridge.Changed -= Reload;
+            CoordinatorAgentBridge.Changed -= OnDataChanged;
+            refresh?.Cancel();
         }
 
         private void OnFocus()
         {
-            Reload();
+            Reload(false);
         }
 
-        private void Reload()
+        private void OnDataChanged() => Reload(false);
+
+        private void Reload(bool force)
         {
-            loadError = string.Empty;
-            statuses.Clear();
+            refresh ??= new CoordinatorDeferredWork(this);
+            if (force)
+                lastFingerprint = null;
+            var quiet = workspace != null && refresh.LastSeconds >= 0.0 && refresh.LastSeconds < QuietRefreshSeconds;
+            refresh.Run("Reading tasks", Refresh(), null, quiet);
+        }
+
+        private IEnumerator<float> Refresh()
+        {
+            var git = new CoordinatorGit(ProjectRoot);
+            string fingerprint = null;
+            var error = Guarded(() =>
+            {
+                git.SnapshotRefs();
+                fingerprint = git.RefsFingerprint + "\n" + DataFingerprint();
+            });
+            if (error == null && fingerprint == lastFingerprint)
+                yield break;
+            yield return 0.1f;
+
+            CoordinatorWorkspace loaded = null;
+            IReadOnlyList<CoordinatorDiagnostic> found = Array.Empty<CoordinatorDiagnostic>();
+            var computed = new Dictionary<string, CoordinatorTaskStatus>(StringComparer.Ordinal);
+            if (error == null)
+            {
+                refresh.Label = "Reading tasks";
+                error = Guarded(() => loaded = CoordinatorWorkspace.Load(ProjectRoot));
+                yield return 0.2f;
+            }
+            if (error == null)
+            {
+                refresh.Label = "Checking tasks";
+                error = Guarded(() => found = CoordinatorValidation.Validate(loaded, git));
+                yield return 0.35f;
+            }
+            if (error == null)
+            {
+                var tasks = loaded.Tasks.OrderBy(task => string.IsNullOrEmpty(taskFilter) || task.Task.id == taskFilter ? 0 : 1).ToArray();
+                for (var index = 0; index < tasks.Length && error == null; index++)
+                {
+                    var task = tasks[index];
+                    refresh.Label = $"Reading branches {index + 1} / {tasks.Length}";
+                    error = Guarded(() => computed[task.Task.id] = CoordinatorStates.Compute(task, git));
+                    yield return 0.35f + 0.65f * (index + 1f) / tasks.Length;
+                }
+            }
+
+            loadError = error ?? string.Empty;
+            if (loaded != null)
+            {
+                workspace = loaded;
+                diagnostics = found;
+                statuses.Clear();
+                foreach (var pair in computed)
+                    statuses[pair.Key] = pair.Value;
+            }
+            lastFingerprint = error == null ? fingerprint : null;
+            CoordinatorGitMemo.Save();
+            RebuildBoard();
+        }
+
+        private static string Guarded(Action step)
+        {
             try
             {
-                workspace = CoordinatorWorkspace.Load(ProjectRoot);
-                var git = new CoordinatorGit(ProjectRoot);
-                diagnostics = CoordinatorValidation.Validate(workspace, git);
-                foreach (var task in workspace.Tasks)
-                    statuses[task.Task.id] = CoordinatorStates.Compute(task, git);
+                step();
+                return null;
             }
             catch (Exception exception) when (exception is CoordinatorGitException or IOException or InvalidOperationException
                                               or System.ComponentModel.Win32Exception)
             {
-                loadError = exception.Message;
+                return exception.Message;
             }
-            RebuildBoard();
+        }
+
+        private static string DataFingerprint()
+        {
+            var text = new System.Text.StringBuilder();
+            foreach (var folder in new[]
+                     {
+                         Path.Combine(ProjectRoot, CoordinatorPaths.RootFolder),
+                         Path.Combine(ProjectRoot, CoordinatorArchitector.RootFolder)
+                     })
+            {
+                if (!Directory.Exists(folder))
+                    continue;
+                foreach (var file in Directory.EnumerateFiles(folder, "*.json", SearchOption.AllDirectories).OrderBy(path => path, StringComparer.Ordinal))
+                {
+                    var info = new FileInfo(file);
+                    text.Append(file).Append('|').Append(info.Length).Append('|').Append(info.LastWriteTimeUtc.Ticks).Append('\n');
+                }
+            }
+            return text.ToString();
         }
 
         private void RebuildBoard()
@@ -93,7 +177,10 @@ namespace Coordinator.Editor
         private void OnGUI()
         {
             EnsureStyles();
+            refresh ??= new CoordinatorDeferredWork(this);
+            using var locked = new EditorGUI.DisabledScope(refresh.Blocking);
             DrawToolbar();
+            refresh.DrawStatus();
             if (loadError.Length > 0)
                 EditorGUILayout.HelpBox(loadError, MessageType.Error);
             if (notice.Length > 0)
@@ -120,7 +207,7 @@ namespace Coordinator.Editor
         {
             using var toolbar = new EditorGUILayout.HorizontalScope(EditorStyles.toolbar);
             if (GUILayout.Button("Reload", EditorStyles.toolbarButton, GUILayout.Width(60f)))
-                Reload();
+                Reload(true);
             if (workspace != null && workspace.Tasks.Count > 0)
             {
                 var tasks = new[] { string.Empty }.Concat(workspace.Tasks.Select(task => task.Task.id)).ToArray();
@@ -159,7 +246,7 @@ namespace Coordinator.Editor
                 return;
             var result = CoordinatorAgentApi.ApproveByPerson(ProjectRoot, task.Task.id, Environment.UserName);
             notice = result.Message;
-            Reload();
+            Reload(true);
         }
 
         private void DrawBoard()

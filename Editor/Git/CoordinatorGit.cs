@@ -15,7 +15,9 @@ namespace Coordinator.Editor
 
     public sealed class CoordinatorGit
     {
+        private static readonly string[] RefPatterns = { "{0}", "refs/{0}", "refs/tags/{0}", "refs/heads/{0}", "refs/remotes/{0}", "refs/remotes/{0}/HEAD" };
         private readonly Dictionary<string, string> resolved = new(StringComparer.Ordinal);
+        private Dictionary<string, string> refSnapshot;
 
         public CoordinatorGit(string repositoryRoot)
         {
@@ -24,16 +26,45 @@ namespace Coordinator.Editor
 
         public string RepositoryRoot { get; }
 
+        public string RefsFingerprint { get; private set; } = string.Empty;
+
+        public void SnapshotRefs()
+        {
+            var result = Run(new[] { "for-each-ref", "--format=%(objectname) %(*objectname) %(refname)" });
+            refSnapshot = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var line in result.Output.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split(' ');
+                if (parts.Length < 3)
+                    continue;
+                refSnapshot[parts[parts.Length - 1]] = parts[1].Length > 0 ? parts[1] : parts[0];
+            }
+            RefsFingerprint = result.Output;
+        }
+
         public string Resolve(string revision)
         {
             if (string.IsNullOrEmpty(revision))
                 return null;
             if (resolved.TryGetValue(revision, out var commit))
                 return commit;
+            if (refSnapshot != null)
+                foreach (var pattern in RefPatterns)
+                    if (refSnapshot.TryGetValue(string.Format(pattern, revision), out commit))
+                        return commit;
+            var fullId = revision.Length == 40 && revision.All(Uri.IsHexDigit);
+            if (fullId && CoordinatorGitMemo.TryGet("commit|" + revision, out commit))
+            {
+                resolved[revision] = commit;
+                return commit;
+            }
             var result = Run(new[] { "rev-parse", "--verify", "--quiet", revision + "^{commit}" }, allowFailure: true);
             commit = result.ExitCode == 0 ? result.Output.Trim() : null;
-            if (commit != null && revision.Length == 40 && revision.All(Uri.IsHexDigit))
+            if (commit != null && fullId)
+            {
                 resolved[revision] = commit;
+                CoordinatorGitMemo.Set("commit|" + revision, commit);
+            }
             return commit;
         }
 
@@ -43,16 +74,27 @@ namespace Coordinator.Editor
             var to = Resolve(descendant);
             if (from == null || to == null)
                 return false;
+            var key = "ancestor|" + from + "|" + to;
+            if (CoordinatorGitMemo.TryGet(key, out var known))
+                return known == "1";
             var result = Run(new[] { "merge-base", "--is-ancestor", from, to }, allowFailure: true);
             if (result.ExitCode > 1)
                 throw new CoordinatorGitException(result.Error);
+            CoordinatorGitMemo.Set(key, result.ExitCode == 0 ? "1" : "0");
             return result.ExitCode == 0;
         }
 
         public bool PathExists(string revision, string path)
         {
             var commit = Resolve(revision);
-            return commit != null && Run(new[] { "cat-file", "-e", commit + ":" + path }, allowFailure: true).ExitCode == 0;
+            if (commit == null)
+                return false;
+            var key = "exists|" + commit + "|" + path;
+            if (CoordinatorGitMemo.TryGet(key, out var known))
+                return known == "1";
+            var exists = Run(new[] { "cat-file", "-e", commit + ":" + path }, allowFailure: true).ExitCode == 0;
+            CoordinatorGitMemo.Set(key, exists ? "1" : "0");
+            return exists;
         }
 
         public string Show(string revision, string path)
@@ -60,8 +102,13 @@ namespace Coordinator.Editor
             var commit = Resolve(revision);
             if (commit == null)
                 return null;
+            var key = "show|" + commit + "|" + path;
+            if (CoordinatorGitMemo.TryGet(key, out var known))
+                return known == CoordinatorGitMemo.Missing ? null : known;
             var result = Run(new[] { "show", commit + ":" + path }, allowFailure: true);
-            return result.ExitCode == 0 ? result.Output : null;
+            var text = result.ExitCode == 0 ? result.Output : null;
+            CoordinatorGitMemo.Set(key, text ?? CoordinatorGitMemo.Missing);
+            return text;
         }
 
         public IReadOnlyList<string> CommitsTouching(string revision, string path)
@@ -69,7 +116,13 @@ namespace Coordinator.Editor
             var commit = Resolve(revision);
             if (commit == null)
                 return Array.Empty<string>();
-            return Run(new[] { "log", "--format=%H", commit, "--", path }).Output
+            var key = "log|" + commit + "|" + path;
+            if (!CoordinatorGitMemo.TryGet(key, out var output))
+            {
+                output = Run(new[] { "log", "--format=%H", commit, "--", path }).Output;
+                CoordinatorGitMemo.Set(key, output);
+            }
+            return output
                 .Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(line => line.Trim())
                 .ToArray();
