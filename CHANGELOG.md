@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Approve All** in the window toolbar when two or more tasks are drafts: one dialog lists every draft with its assignment count and validation errors, and approves them all as one Undo step.
+
 ## 0.1.1
 
 - **The window opens at once.** Git and the task data are read after the window is shown, with a loading bar on the first load only.
