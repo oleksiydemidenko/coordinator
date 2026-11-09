@@ -97,6 +97,32 @@ namespace Coordinator.Editor.Tests
         }
 
         [Test]
+        public void ApproveAllApprovesEveryDraftInOneUndoStep()
+        {
+            CreateTask();
+            var second = Json(project.Task);
+            second["id"] = "lights";
+            second["title"] = "Lights";
+            second["integrationBranch"] = "task/lights";
+            Assert.That(Edit(new { action = "create_task", task = second }).Success, Is.True);
+            CoordinatorHistory.Clear();
+
+            var approved = CoordinatorAgentApi.ApproveAllByPerson(project.Root, new[] { "doors", "lights" }, "owner");
+
+            Assert.That(approved.Success, Is.True, approved.ToJson());
+            var workspace = CoordinatorWorkspace.Load(project.Root);
+            Assert.That(workspace.FindTask("doors").Task.approval.by, Is.EqualTo("owner"));
+            Assert.That(workspace.FindTask("lights").Task.approval.by, Is.EqualTo("owner"));
+            Assert.That(CoordinatorAgentApi.ApproveAllByPerson(project.Root, new[] { "doors", "lights" }, "owner").Code, Is.EqualTo("nothing_to_approve"));
+
+            Assert.That(CoordinatorHistory.Undo(), Does.StartWith("Undone"));
+            workspace = CoordinatorWorkspace.Load(project.Root);
+            Assert.That(workspace.FindTask("doors").Task.approval, Is.Null);
+            Assert.That(workspace.FindTask("lights").Task.approval, Is.Null);
+            Assert.That(CoordinatorHistory.CanUndo, Is.False, "Approving several tasks is one Undo step.");
+        }
+
+        [Test]
         public void OnlyAPersonApprovesAndAcceptanceNamesThePersonWhoDecided()
         {
             CreateTask();

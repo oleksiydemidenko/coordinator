@@ -237,6 +237,9 @@ namespace Coordinator.Editor
                 if (selectedTask != null && selectedTask.Task.approval == null && selectedTask.Task.cancelled == null
                     && GUILayout.Button("Approve…", EditorStyles.toolbarButton, GUILayout.Width(70f)))
                     Approve(selectedTask);
+                var drafts = workspace.Tasks.Where(task => task.Task.approval == null && task.Task.cancelled == null).ToArray();
+                if (drafts.Length > 1 && GUILayout.Button($"Approve All ({drafts.Length})…", EditorStyles.toolbarButton, GUILayout.Width(118f)))
+                    ApproveAll(drafts);
             }
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("Agents", EditorStyles.toolbarButton, GUILayout.Width(56f)))
@@ -268,6 +271,22 @@ namespace Coordinator.Editor
             notice = undo ? CoordinatorHistory.Undo() : CoordinatorHistory.Redo();
             Reload(true);
             GUIUtility.ExitGUI();
+        }
+
+        private void ApproveAll(IReadOnlyList<CoordinatorTaskData> drafts)
+        {
+            var lines = drafts.Select(task =>
+            {
+                var errors = diagnostics.Count(diagnostic => diagnostic.IsError
+                                                             && diagnostic.File.StartsWith(CoordinatorPaths.RepositoryTaskFolder(task.Task.id) + "/", StringComparison.Ordinal));
+                return $"• {task.Task.title} — {task.Assignments.Count} assignment(s)" + (errors > 0 ? $", {errors} validation error(s)" : string.Empty);
+            });
+            var message = $"Approve the split of these {drafts.Count} task(s)? Assignments whose decisions and inputs are ready can start.\n\n" + string.Join("\n", lines);
+            if (!EditorUtility.DisplayDialog("Approve All Tasks", message, "Approve All", "Cancel"))
+                return;
+            var result = CoordinatorAgentApi.ApproveAllByPerson(ProjectRoot, drafts.Select(task => task.Task.id).ToArray(), Environment.UserName);
+            notice = result.Message;
+            Reload(true);
         }
 
         private void Approve(CoordinatorTaskData task)

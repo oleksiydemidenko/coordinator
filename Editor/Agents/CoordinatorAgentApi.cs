@@ -86,6 +86,24 @@ namespace Coordinator.Editor
             return Commit(projectRoot, $"Task '{taskId}' approved by {person}.", Documents((TaskFile(projectRoot, taskId), data.Task)));
         }
 
+        public static CoordinatorAgentResult ApproveAllByPerson(string projectRoot, IReadOnlyList<string> taskIds, string person)
+        {
+            var workspace = CoordinatorWorkspace.Load(projectRoot);
+            var date = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var documents = new Dictionary<string, object>();
+            foreach (var taskId in taskIds)
+            {
+                var data = workspace.FindTask(taskId) ?? throw new CoordinatorAgentException("task_not_found", $"No task '{taskId}'.");
+                if (data.Task.approval != null || data.Task.cancelled != null)
+                    continue;
+                data.Task.approval = new CoordinatorSignatureRecord { by = person, date = date };
+                documents[TaskFile(projectRoot, taskId)] = data.Task;
+            }
+            if (documents.Count == 0)
+                return CoordinatorAgentResult.Fail("nothing_to_approve", "No draft task to approve.");
+            return Commit(projectRoot, $"{documents.Count} task(s) approved by {person}.", documents);
+        }
+
         private static CoordinatorAgentResult Capabilities()
         {
             return CoordinatorAgentResult.Ok("Coordinator capabilities.", new
