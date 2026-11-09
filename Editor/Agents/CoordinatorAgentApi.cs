@@ -326,7 +326,10 @@ namespace Coordinator.Editor
             var after = Validated(root, CoordinatorWorkspace.Load(root));
             var introduced = after.Where(diagnostic => diagnostic.IsError && !before.Contains(Key(diagnostic))).ToArray();
             if (introduced.Length == 0)
+            {
+                CoordinatorHistory.Record(message, backups);
                 return CoordinatorAgentResult.Ok(message, new { warnings = Diagnostics(after.Where(diagnostic => !diagnostic.IsError)) });
+            }
 
             foreach (var backup in backups)
             {

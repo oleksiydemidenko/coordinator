@@ -1,6 +1,6 @@
 {
   "name": "com.oleksiydemidenko.coordinator",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Coordinator",
   "description": "Agent task cards for Unity projects: a task split into bounded assignments with exclusive write zones, shared decisions made first, and deliveries checked through git. Built to be read and written by coding agents. In development.",
   "unity": "6000.3",

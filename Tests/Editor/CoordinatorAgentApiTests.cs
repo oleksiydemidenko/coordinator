@@ -24,7 +24,11 @@ namespace Coordinator.Editor.Tests
         }
 
         [TearDown]
-        public void TearDown() => project.Dispose();
+        public void TearDown()
+        {
+            CoordinatorHistory.Clear();
+            project.Dispose();
+        }
 
         private string Git(params string[] arguments) => git.Run(arguments).Output;
 
@@ -62,6 +66,34 @@ namespace Coordinator.Editor.Tests
             Assert.That(result.ToJson(), Does.Contain("zone_overlap"));
             Assert.That(File.ReadAllText(path), Is.EqualTo(before));
             Assert.That(CoordinatorWorkspace.Load(project.Root).FindTask("doors").Task.approval, Is.Null);
+        }
+
+        [Test]
+        public void EditsCanBeUndoneAndRedoneUnlessTheFilesChangedSince()
+        {
+            CoordinatorHistory.Clear();
+            CreateTask();
+            var taskFile = Path.Combine(project.Paths.TaskFolder("doors"), CoordinatorPaths.TaskFile);
+            var approved = CoordinatorAgentApi.ApproveByPerson(project.Root, "doors", "owner");
+            Assert.That(approved.Success, Is.True);
+            var approvedText = File.ReadAllText(taskFile);
+            Assert.That(CoordinatorHistory.NextUndoName, Does.Contain("approved"));
+
+            Assert.That(CoordinatorHistory.Undo(), Does.StartWith("Undone"));
+            Assert.That(File.ReadAllText(taskFile), Does.Not.Contain("\"approval\": {"));
+            Assert.That(CoordinatorHistory.Redo(), Does.StartWith("Redone"));
+            Assert.That(File.ReadAllText(taskFile), Is.EqualTo(approvedText));
+
+            File.WriteAllText(taskFile, approvedText.Replace("owner", "someone else"));
+            Assert.That(CoordinatorHistory.Undo(), Does.StartWith("Cannot undo").And.Contain(CoordinatorPaths.TaskFile));
+            Assert.That(File.ReadAllText(taskFile), Does.Contain("someone else"), "A refused undo leaves the files as they are.");
+            File.WriteAllText(taskFile, approvedText);
+
+            while (CoordinatorHistory.CanUndo)
+                Assert.That(CoordinatorHistory.Undo(), Does.StartWith("Undone"));
+            Assert.That(Directory.Exists(project.Paths.TaskFolder("doors")), Is.False, "Undoing create_task removes the task folder it created.");
+            Assert.That(CoordinatorHistory.Redo(), Does.StartWith("Redone"));
+            Assert.That(File.Exists(taskFile), Is.True);
         }
 
         [Test]

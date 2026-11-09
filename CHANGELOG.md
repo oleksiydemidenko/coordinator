@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1
+
+- **The window opens at once.** Git and the task data are read after the window is shown, with a loading bar on the first load only.
+  - Each refresh starts with one listing of all branches and the data files, and stops there when nothing moved, which is the usual case when the window gets focus.
+  - Git answers about commits are remembered across refreshes and script reloads (`Library/Coordinator/git-memo.json`), so only branches that moved cost git calls.
+  - Later refreshes keep the board on screen and run quietly while they are short.
+- **Undo and Redo** in the window toolbar, and Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) while the window has focus. Every change through Coordinator is one step: an agent edit or a task approval in the window.
+  - A step restores the files it changed, and removes a task folder it created.
+  - A step is refused, and the files stay as they are, when one of them changed since then outside Coordinator, for example by a git pull or a delivery.
+  - The history lasts for the Editor session and survives script reloads.
+
 ## 0.1.0
 
 First, test release: the model, validation, git-computed states, cards, agent access and the MCP server are complete; the window is a draft until its final design.

@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <StartupObject>McpServer</StartupObject>
     <AssemblyName>coordinator-mcp</AssemblyName>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <InvariantGlobalization>true</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>

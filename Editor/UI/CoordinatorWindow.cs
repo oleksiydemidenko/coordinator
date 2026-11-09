@@ -48,12 +48,14 @@ namespace Coordinator.Editor
         {
             titleContent = new GUIContent("Coordinator");
             CoordinatorAgentBridge.Changed += OnDataChanged;
+            CoordinatorHistory.Changed += Repaint;
             Reload(false);
         }
 
         private void OnDisable()
         {
             CoordinatorAgentBridge.Changed -= OnDataChanged;
+            CoordinatorHistory.Changed -= Repaint;
             refresh?.Cancel();
         }
 
@@ -179,6 +181,8 @@ namespace Coordinator.Editor
             EnsureStyles();
             refresh ??= new CoordinatorDeferredWork(this);
             using var locked = new EditorGUI.DisabledScope(refresh.Blocking);
+            if (!refresh.Blocking)
+                HandleUndoRedoShortcut();
             DrawToolbar();
             refresh.DrawStatus();
             if (loadError.Length > 0)
@@ -208,6 +212,12 @@ namespace Coordinator.Editor
             using var toolbar = new EditorGUILayout.HorizontalScope(EditorStyles.toolbar);
             if (GUILayout.Button("Reload", EditorStyles.toolbarButton, GUILayout.Width(60f)))
                 Reload(true);
+            using (new EditorGUI.DisabledScope(!CoordinatorHistory.CanUndo))
+                if (GUILayout.Button(new GUIContent("Undo", CoordinatorHistory.CanUndo ? $"Undo {CoordinatorHistory.NextUndoName} (Ctrl+Z)" : "Nothing to undo"), EditorStyles.toolbarButton, GUILayout.Width(44f)))
+                    UndoRedo(true);
+            using (new EditorGUI.DisabledScope(!CoordinatorHistory.CanRedo))
+                if (GUILayout.Button(new GUIContent("Redo", CoordinatorHistory.CanRedo ? $"Redo {CoordinatorHistory.NextRedoName} (Ctrl+Y)" : "Nothing to redo"), EditorStyles.toolbarButton, GUILayout.Width(44f)))
+                    UndoRedo(false);
             if (workspace != null && workspace.Tasks.Count > 0)
             {
                 var tasks = new[] { string.Empty }.Concat(workspace.Tasks.Select(task => task.Task.id)).ToArray();
@@ -234,6 +244,30 @@ namespace Coordinator.Editor
             var errors = diagnostics.Count(diagnostic => diagnostic.IsError);
             var warnings = diagnostics.Count - errors;
             showDiagnostics = GUILayout.Toggle(showDiagnostics, $"Diagnostics {errors}/{warnings}", EditorStyles.toolbarButton, GUILayout.Width(110f));
+        }
+
+        private void HandleUndoRedoShortcut()
+        {
+            var current = Event.current;
+            if (current.type != EventType.KeyDown || !(current.control || current.command) || EditorGUIUtility.editingTextField)
+                return;
+            if (current.keyCode == KeyCode.Z && !current.shift)
+            {
+                UndoRedo(true);
+                current.Use();
+            }
+            else if (current.keyCode == KeyCode.Y || current.keyCode == KeyCode.Z && current.shift)
+            {
+                UndoRedo(false);
+                current.Use();
+            }
+        }
+
+        private void UndoRedo(bool undo)
+        {
+            notice = undo ? CoordinatorHistory.Undo() : CoordinatorHistory.Redo();
+            Reload(true);
+            GUIUtility.ExitGUI();
         }
 
         private void Approve(CoordinatorTaskData task)
