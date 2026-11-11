@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - **The scope check compares the delivered commits with the task branch.** It starts from the merge base of the task branch and the delivered revision (the task base while the task branch does not exist), so work a dependent card inherited from the task branch is not reported, and moving the task base does not change the answer. The task branch must contain the task base.
   - Card commands use the task branch by name: `git diff --no-renames --name-only <task branch>...HEAD` for the zone and the reserved paths, a first line that prints only when the task branch is missing or does not contain the base, and `git status --porcelain` for uncommitted changes, which are not part of the delivery. The card's own commands no longer carry the base commit, so they do not go stale when the base moves.
