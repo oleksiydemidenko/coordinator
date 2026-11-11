@@ -99,13 +99,17 @@ namespace Coordinator.Editor
         {
             var task = data.Task;
             var text = new Text();
-            var baseRevision = CoordinatorScope.Base(task);
+            var taskBranch = CoordinatorScope.TaskBranch(task);
             text.Line(Banner).Line($"# {assignment.title}").Blank();
             var environment = assignment.executor?.environment;
             text.Line($"Task: {task.title} (`{task.id}`). Lead: {task.lead}. Disciplines: {string.Join(", ", assignment.disciplines)}.").Blank();
             text.Line(Environment(environment)).Blank();
-            text.Line($"Work in branch `{assignment.executor?.branch}`, started from `{task.baseRevision.branch}`"
-                      + (string.IsNullOrEmpty(task.baseRevision.commit) ? "." : $" (`{Short(task.baseRevision.commit)}`).")
+            var dependent = assignment.dependsOn.outputs.Count > 0 || assignment.inputs.Any(input => input.kind == CoordinatorInputKinds.Output);
+            text.Line($"Work in branch `{assignment.executor?.branch}`, started from "
+                      + (dependent
+                          ? $"the tip of the task branch `{taskBranch}` once the outputs this assignment waits for are merged there."
+                          : $"`{task.baseRevision.branch}`" + (string.IsNullOrEmpty(task.baseRevision.commit) ? "" : $" (`{Short(task.baseRevision.commit)}`)")
+                            + $" or the tip of the task branch `{taskBranch}`.")
                       + " Read the current version of this card from the lead's branch, not from your checkout:").Blank();
             text.Code($"git show {task.targetBranch}:{CardPath(task.id, assignment.id)}");
             if (assignment.cancelled != null)
@@ -214,7 +218,12 @@ namespace Coordinator.Editor
                 text.Line($"- `<{variable}>`: {description} Ask the lead for its value on your machine.");
             }
             if (listedChecks.Any(id => project.checks.Any(check => check.id == id && check.generated == "scope")))
+            {
+                text.Blank().Line($"They compare your commits with the task branch `{taskBranch}`, so work you inherited from it is not reported. The lead runs the same check on the delivered revision at acceptance.");
                 text.Blank().Code(string.Join("\n", CoordinatorScope.Commands(project, task, assignment, architector)));
+                text.Blank().Line("Uncommitted changes are not part of your delivery. This lists them; commit or remove each before you deliver:");
+                text.Blank().Code(CoordinatorScope.UncommittedCommand);
+            }
 
             var leadItems = assignment.acceptance.Where(item => item.runBy == CoordinatorRunBy.Lead).ToArray();
             if (leadItems.Length > 0)
@@ -231,9 +240,16 @@ namespace Coordinator.Editor
             text.Blank().Line("## Hand-In And Merge").Blank();
             text.Line("1. Your operator, the person who runs you, checks the result and hands this card in to the lead. Pushing and pull requests are the operator's act: never push.");
             text.Line("2. The lead reviews the card and accepts or returns it. A returned card comes back with findings; fix them in your branch and deliver again.");
-            text.Line($"3. When the lead has accepted it, merge your branch into the task branch `{task.integrationBranch}`. Never merge into `{task.targetBranch}`: only the lead's approval of the whole task branch lets it in.");
-            text.Blank().Code($"git switch {task.integrationBranch}\ngit merge --no-ff {assignment.executor?.branch}");
+            text.Line($"3. When the lead has accepted it, merge the accepted revision into the task branch `{taskBranch}`, not the tip of your branch: commits after the accepted revision are not reviewed. "
+                      + $"If `git rev-parse {assignment.executor?.branch}` prints another commit, deliver again instead. Never merge into `{task.targetBranch}`: only the lead's approval of the whole task branch lets it in.");
+            text.Blank().Code($"git switch {taskBranch}\ngit merge --no-ff {AcceptedRevision(data, assignment)}");
             return text.ToString();
+        }
+
+        private static string AcceptedRevision(CoordinatorTaskData data, CoordinatorAssignmentRecord assignment)
+        {
+            var last = data.Reviews.TryGetValue(assignment.id, out var review) ? review.rounds.LastOrDefault() : null;
+            return last != null && last.verdict == CoordinatorVerdicts.Accepted && !string.IsNullOrEmpty(last.revision) ? last.revision : "<accepted revision>";
         }
 
         private static string Environment(string environment) => environment switch

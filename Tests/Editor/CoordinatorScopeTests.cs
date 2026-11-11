@@ -6,7 +6,7 @@ namespace Coordinator.Editor.Tests
     public sealed class CoordinatorScopeTests
     {
         [Test]
-        public void CommandsExcludeTheZoneAndTheDeliveryFileAndListReservedChanges()
+        public void CommandsCompareCommitsWithTheTaskBranchExcludeTheZoneAndListReservedChanges()
         {
             using var project = new CoordinatorTestProject();
             var commands = CoordinatorScope.Commands(project.Project, project.Task, project.Assignments[0]);
@@ -15,22 +15,21 @@ namespace Coordinator.Editor.Tests
 
             Assert.That(commands, Is.EqualTo(new[]
             {
-                "git merge-base --is-ancestor abc1234 HEAD || echo \"base is not an ancestor of HEAD\"",
-                "git diff --no-renames --name-only abc1234 -- . " + zone,
-                "git ls-files --others --exclude-standard -- . " + zone,
-                "git diff --no-renames --name-only abc1234 -- " + reserved,
-                "git ls-files --others --exclude-standard -- " + reserved
+                "git merge-base --is-ancestor abc1234 integration/doors || echo \"The task branch integration/doors is missing or does not contain the task base: ask the lead. Until the branch exists, use abc1234...HEAD in the commands below.\"",
+                "git diff --no-renames --name-only integration/doors...HEAD -- . " + zone,
+                "git diff --no-renames --name-only integration/doors...HEAD -- " + reserved
             }));
+            Assert.That(string.Join("\n", commands.Skip(1)), Does.Not.Contain("abc1234"), "Only the first line names the base, so a moved base cannot make the diff stale.");
         }
 
         [Test]
-        public void WithoutACommitTheBaseBranchIsUsed()
+        public void WithoutACommitTheBaseBranchIsNamedInTheFirstLine()
         {
             using var project = new CoordinatorTestProject();
             project.Task.baseRevision.commit = null;
 
             Assert.That(CoordinatorScope.Commands(project.Project, project.Task, project.Assignments[0]).First(),
-                Does.StartWith("git merge-base --is-ancestor coordination/doors-start HEAD"));
+                Does.StartWith("git merge-base --is-ancestor coordination/doors-start integration/doors"));
         }
     }
 }

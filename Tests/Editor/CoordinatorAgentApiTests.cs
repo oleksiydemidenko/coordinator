@@ -123,19 +123,28 @@ namespace Coordinator.Editor.Tests
         }
 
         [Test]
-        public void OnlyAPersonApprovesAndAcceptanceNamesThePersonWhoDecided()
+        public void OnlyAPersonApprovesAndAcceptanceNamesThePersonWhoDecidedAndRecordsTheScope()
         {
+            Git("checkout", "-q", "-b", "task/door-rules");
+            project.WriteFile("Assets/Scripts/Doors/Door.cs", "class Door { int open; }");
+            Commit("door");
+            var delivered = Git("rev-parse", "HEAD").Trim();
+            Git("checkout", "-q", "develop");
             CreateTask();
 
             Assert.That(Edit(new { action = "approve_task", task = "doors" }).Code, Is.EqualTo("needs_person"));
-            var withoutPerson = Edit(new { action = "record_review", task = "doors", assignment = "door-rules", round = new { revision = "abc", verdict = "accepted", acceptedBy = "agent" } });
+            var withoutPerson = Edit(new { action = "record_review", task = "doors", assignment = "door-rules", round = new { revision = delivered, verdict = "accepted", acceptedBy = "agent" } });
             Assert.That(withoutPerson.Code, Is.EqualTo("needs_person"));
 
             Assert.That(CoordinatorAgentApi.ApproveByPerson(project.Root, "doors", "owner").Success, Is.True);
             Assert.That(CoordinatorAgentApi.ApproveByPerson(project.Root, "doors", "owner").Code, Is.EqualTo("already_approved"));
-            var accepted = Edit(new { action = "record_review", task = "doors", assignment = "door-rules", round = new { revision = "abc", verdict = "accepted", acceptedBy = "agent", instructedBy = "owner" } });
+            var accepted = Edit(new { action = "record_review", task = "doors", assignment = "door-rules", round = new { revision = delivered, verdict = "accepted", acceptedBy = "agent", instructedBy = "owner" } });
             Assert.That(accepted.Success, Is.True, accepted.ToJson());
-            Assert.That(CoordinatorWorkspace.Load(project.Root).FindTask("doors").Reviews["door-rules"].rounds.Single().instructedBy, Is.EqualTo("owner"));
+            var round = CoordinatorWorkspace.Load(project.Root).FindTask("doors").Reviews["door-rules"].rounds.Single();
+            Assert.That(round.instructedBy, Is.EqualTo("owner"));
+            Assert.That(round.checks.Single().check, Is.EqualTo("scope"));
+            Assert.That(round.checks.Single().result, Does.Contain("Inside the zone").And.Contain("the task base"));
+            Assert.That(round.checks.Single().command, Does.EndWith(delivered));
         }
 
         [Test]
@@ -169,7 +178,7 @@ namespace Coordinator.Editor.Tests
         }
 
         [Test]
-        public void ScopeChecksAnExecutorCheckoutAgainstTheZoneAndReservedPaths()
+        public void ScopeChecksAnExecutorsCommitsAgainstTheZoneAndReservedPathsAndListsUncommittedWork()
         {
             CreateTask();
             Commit("task");
@@ -177,17 +186,23 @@ namespace Coordinator.Editor.Tests
             Git("worktree", "add", "-q", "-b", "task/door-rules", worktree, project.Task.baseRevision.commit);
             try
             {
+                var executor = new CoordinatorGit(worktree);
                 File.WriteAllText(Path.Combine(worktree, "Assets/Scripts/Doors/Door.cs"), "class Door { int open; }");
                 File.WriteAllText(Path.Combine(worktree, "Assets/Scripts/Doors/Hall.unity"), "scene");
+                executor.Run(new[] { "add", "-A" });
+                executor.Run(new[] { "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "door" });
                 Directory.CreateDirectory(Path.Combine(worktree, "Assets/Scripts/Lights"));
                 File.WriteAllText(Path.Combine(worktree, "Assets/Scripts/Lights/Lamp.cs"), "class Lamp {}");
 
                 var report = JObject.Parse(Query(new { action = "scope", task = "doors", assignment = "door-rules", checkout = worktree }).ToJson())["data"];
 
                 Assert.That((bool)report["clean"], Is.False);
-                Assert.That((bool)report["base_is_ancestor"], Is.True);
-                Assert.That(report["outside_zone"].Values<string>(), Is.EqualTo(new[] { "Assets/Scripts/Lights/Lamp.cs" }));
-                Assert.That(report["reserved"].Values<string>(), Is.EqualTo(new[] { "Assets/Scripts/Doors/Hall.unity" }));
+                Assert.That((bool)report["delivered"]["base_is_ancestor"], Is.True);
+                Assert.That((bool)report["delivered"]["start_is_base"], Is.True, "No task branch yet: the base is the start.");
+                Assert.That(report["delivered"]["outside_zone"].Values<string>(), Is.Empty);
+                Assert.That(report["delivered"]["reserved"].Values<string>(), Is.EqualTo(new[] { "Assets/Scripts/Doors/Hall.unity" }));
+                Assert.That(report["uncommitted"]["outside_zone"].Values<string>(), Is.EqualTo(new[] { "Assets/Scripts/Lights/Lamp.cs" }));
+                Assert.That(report["uncommitted"]["inside_zone"].Values<string>(), Is.Empty);
             }
             finally
             {

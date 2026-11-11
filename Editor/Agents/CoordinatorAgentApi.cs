@@ -34,7 +34,7 @@ namespace Coordinator.Editor
                     "task" => Task(root, Required(parameters, "task")),
                     "card" => Card(root, Required(parameters, "task"), Required(parameters, "assignment")),
                     "validate" => Validate(root),
-                    "scope" => Scope(root, Required(parameters, "task"), Required(parameters, "assignment"), (string)parameters["checkout"]),
+                    "scope" => Scope(root, Required(parameters, "task"), Required(parameters, "assignment"), (string)parameters["checkout"], (string)parameters["revision"]),
                     _ => CoordinatorAgentResult.Fail("unknown_action", "Query actions: " + string.Join(", ", QueryActions) + ".")
                 };
             }
@@ -124,6 +124,8 @@ namespace Coordinator.Editor
                     "An edit that adds validation errors is rolled back and returns them.",
                     "Only a person approves a task. approve_task always refuses; the user approves in the Coordinator window.",
                     "record_review with verdict accepted needs acceptedBy and instructedBy, the person who decided to accept.",
+                    "record_review with verdict accepted runs the scope check on the round's revision against the task branch and records it in checks; a path outside the zone or a reserved path refuses acceptance.",
+                    "scope compares the delivered commits with the task branch (merge base to revision); with checkout it also lists uncommitted changes, which are not part of the delivery.",
                     "States are computed from git: never write them. Executors write their delivery file in their own branch.",
                     "Changing a task after approval keeps the approval; tell the user what changed."
                 }
@@ -170,6 +172,7 @@ namespace Coordinator.Editor
                         title = card.Assignment.title,
                         state = card.State,
                         blocked_by = card.Status?.BlockedBy.Count > 0 ? card.Status.BlockedBy : null,
+                        problem = card.Status?.Problem,
                         executor = card.Assignment.executor?.handle
                     }).ToArray()
                 }).ToArray()
@@ -197,7 +200,8 @@ namespace Coordinator.Editor
                         disciplines = assignment.disciplines,
                         state = assignmentStatus?.State,
                         blocked_by = assignmentStatus?.BlockedBy.Count > 0 ? assignmentStatus.BlockedBy : null,
-                        delivered_revision = assignmentStatus?.DeliveredRevision
+                        delivered_revision = assignmentStatus?.DeliveredRevision,
+                        problem = assignmentStatus?.Problem
                     };
                 }).ToArray(),
                 diagnostics = Diagnostics(Validated(root, workspace).Where(diagnostic => diagnostic.File.StartsWith(folder, StringComparison.Ordinal)))
@@ -237,28 +241,57 @@ namespace Coordinator.Editor
             });
         }
 
-        private static CoordinatorAgentResult Scope(string root, string taskId, string assignmentId, string checkout)
+        private static CoordinatorAgentResult Scope(string root, string taskId, string assignmentId, string checkout, string revision)
         {
             var workspace = CoordinatorWorkspace.Load(root);
             var data = workspace.FindTask(taskId) ?? throw new CoordinatorAgentException("task_not_found", $"No task '{taskId}'.");
             var assignment = data.Assignments.FirstOrDefault(candidate => candidate.id == assignmentId)
                              ?? throw new CoordinatorAgentException("assignment_not_found", $"Task '{taskId}' has no assignment '{assignmentId}'.");
             var commands = CoordinatorScope.Commands(workspace.Project, data.Task, assignment, workspace.Architector);
-            if (string.IsNullOrEmpty(checkout))
-                return CoordinatorAgentResult.Ok("Scope commands; each prints nothing when the checkout is inside the zone.", new { commands });
-
-            if (!Directory.Exists(checkout))
-                throw new CoordinatorAgentException("checkout_not_found", $"Checkout '{checkout}' does not exist.");
-            var report = CoordinatorScope.Check(new CoordinatorGit(checkout), workspace.Project, data.Task, assignment, workspace.Architector);
-            return CoordinatorAgentResult.Ok(report.Clean ? "The checkout is inside the zone." : "The checkout leaves the zone.", new
+            CoordinatorGit git;
+            if (!string.IsNullOrEmpty(checkout))
             {
-                clean = report.Clean,
-                base_is_ancestor = report.BaseIsAncestor,
-                outside_zone = report.OutsideZone,
-                reserved = report.Reserved,
-                commands
+                if (!Directory.Exists(checkout))
+                    throw new CoordinatorAgentException("checkout_not_found", $"Checkout '{checkout}' does not exist.");
+                git = new CoordinatorGit(checkout);
+                revision ??= "HEAD";
+            }
+            else
+            {
+                git = Git(root);
+                if (git != null && string.IsNullOrEmpty(revision))
+                    revision = CoordinatorStates.Compute(data, git).Find(assignmentId)?.DeliveredRevision;
+            }
+            if (git == null || string.IsNullOrEmpty(revision))
+                return CoordinatorAgentResult.Ok("Scope commands; each prints nothing when the commits are inside the zone. Nothing is delivered yet to check.",
+                    new { commands, uncommitted_command = CoordinatorScope.UncommittedCommand });
+
+            var delivered = CoordinatorScope.Check(git, workspace.Project, data.Task, assignment, revision, workspace.Architector);
+            var uncommitted = string.IsNullOrEmpty(checkout) ? null : CoordinatorScope.Uncommitted(git, workspace.Project, data.Task, assignment, workspace.Architector);
+            var message = (delivered.Clean ? "The commits are inside the zone." : "The commits leave the zone.")
+                          + (uncommitted == null ? "" : uncommitted.Clean ? " Nothing is uncommitted." : " The checkout has uncommitted changes; they are not part of the delivery.");
+            return CoordinatorAgentResult.Ok(message, new
+            {
+                clean = delivered.Clean,
+                delivered = ScopeJson(delivered),
+                uncommitted = uncommitted == null ? null : new { inside_zone = uncommitted.InsideZone, outside_zone = uncommitted.OutsideZone },
+                commands,
+                uncommitted_command = CoordinatorScope.UncommittedCommand
             });
         }
+
+        private static object ScopeJson(CoordinatorScopeReport report) => new
+        {
+            clean = report.Clean,
+            revision = report.Revision,
+            task_branch = report.TaskBranch,
+            start = report.Start,
+            start_is_base = report.StartIsBase,
+            base_is_ancestor = report.BaseIsAncestor,
+            problem = report.Problem,
+            outside_zone = report.OutsideZone,
+            reserved = report.Reserved
+        };
 
         private static CoordinatorAgentResult CreateTask(string root, CoordinatorTaskRecord task)
         {
@@ -323,6 +356,8 @@ namespace Coordinator.Editor
                 throw new CoordinatorAgentException("assignment_not_found", $"Task '{taskId}' has no assignment '{assignmentId}'.");
             if (round.verdict == CoordinatorVerdicts.Accepted && (string.IsNullOrWhiteSpace(round.acceptedBy) || string.IsNullOrWhiteSpace(round.instructedBy)))
                 throw new CoordinatorAgentException("needs_person", "Acceptance needs acceptedBy and instructedBy: the person who decided to accept. Ask the user first.");
+            if (round.verdict == CoordinatorVerdicts.Accepted)
+                RecordScope(root, data, assignmentId, round);
             if (string.IsNullOrEmpty(round.date))
                 round.date = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             var review = data.Reviews.TryGetValue(assignmentId, out var existing) ? existing : new CoordinatorReviewRecord { assignment = assignmentId };
@@ -330,6 +365,55 @@ namespace Coordinator.Editor
             return Commit(root, $"Review round for '{assignmentId}' recorded: {round.verdict}.",
                 Documents((Path.Combine(new CoordinatorPaths(root).TaskFolder(taskId), assignmentId + CoordinatorPaths.ReviewSuffix), review)));
         }
+
+        private static void RecordScope(string root, CoordinatorTaskData data, string assignmentId, CoordinatorReviewRoundRecord round)
+        {
+            var git = Git(root) ?? throw new CoordinatorAgentException("scope_unavailable", "Acceptance runs the scope check in git, and this project is not a git repository.");
+            if (string.IsNullOrWhiteSpace(round.revision))
+                throw new CoordinatorAgentException("invalid_parameters", "'round.revision' is required: the delivered revision the lead accepts.");
+            var workspace = CoordinatorWorkspace.Load(root);
+            var assignment = data.Assignments.First(candidate => candidate.id == assignmentId);
+            CoordinatorScopeReport report;
+            try
+            {
+                report = CoordinatorScope.Check(git, workspace.Project, data.Task, assignment, round.revision, workspace.Architector);
+            }
+            catch (CoordinatorGitException exception)
+            {
+                throw new CoordinatorAgentException("git_failed", exception.Message);
+            }
+            if (!report.Clean)
+            {
+                var reasons = new List<string>();
+                if (report.Problem != null)
+                    reasons.Add(report.Problem);
+                if (report.Problem == null && !report.BaseIsAncestor)
+                    reasons.Add(report.StartIsBase
+                        ? $"The task base is not an ancestor of {Short(report.Revision)}."
+                        : $"The task branch '{report.TaskBranch}' does not contain the task base.");
+                if (report.OutsideZone.Count > 0)
+                    reasons.Add("Outside the zone: " + string.Join(", ", report.OutsideZone) + ".");
+                if (report.Reserved.Count > 0)
+                    reasons.Add("Reserved: " + string.Join(", ", report.Reserved) + ".");
+                throw new CoordinatorAgentException("scope_failed",
+                    "Acceptance refused: the delivered commits leave the zone. " + string.Join(" ", reasons)
+                    + " Return the card, or widen the zone with set_assignment first.");
+            }
+            var checkId = workspace.Project.checks.FirstOrDefault(check => check.generated == "scope")?.id ?? "scope";
+            round.checks ??= new List<CoordinatorCheckResultRecord>();
+            round.checks.RemoveAll(check => check.check == checkId);
+            round.checks.Add(new CoordinatorCheckResultRecord
+            {
+                check = checkId,
+                command = $"git diff --no-renames --name-only {report.Start} {report.Revision}",
+                exitCode = 0,
+                result = $"Inside the zone, no reserved path. Start {Short(report.Start)} "
+                         + (report.StartIsBase ? "(the task base; the task branch does not exist)" : $"(merge base of {report.TaskBranch} and the revision)")
+                         + $", revision {Short(report.Revision)}. Run by Coordinator at acceptance."
+            });
+        }
+
+        private static string Short(string commit) => commit == null ? "?" : commit.Length > 8 ? commit.Substring(0, 8) : commit;
 
         private static CoordinatorAgentResult Commit(string root, string message, IReadOnlyDictionary<string, object> documents, IEnumerable<string> deletions = null)
         {

@@ -84,6 +84,37 @@ namespace Coordinator.Editor
             return result.ExitCode == 0;
         }
 
+        public string MergeBase(string left, string right)
+        {
+            var from = Resolve(left);
+            var to = Resolve(right);
+            if (from == null || to == null)
+                return null;
+            var key = "merge-base|" + from + "|" + to;
+            if (CoordinatorGitMemo.TryGet(key, out var known))
+                return known == CoordinatorGitMemo.Missing ? null : known;
+            var result = Run(new[] { "merge-base", from, to }, allowFailure: true);
+            if (result.ExitCode > 1)
+                throw new CoordinatorGitException(result.Error);
+            var commit = result.ExitCode == 0 ? result.Output.Trim() : null;
+            CoordinatorGitMemo.Set(key, commit ?? CoordinatorGitMemo.Missing);
+            return commit;
+        }
+
+        public int CountCommits(string from, string to)
+        {
+            var start = Resolve(from);
+            var end = Resolve(to);
+            if (start == null || end == null || start == end)
+                return 0;
+            var key = "count|" + start + "|" + end;
+            if (CoordinatorGitMemo.TryGet(key, out var known) && int.TryParse(known, out var count))
+                return count;
+            count = int.Parse(Run(new[] { "rev-list", "--count", start + ".." + end }).Output.Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            CoordinatorGitMemo.Set(key, count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            return count;
+        }
+
         public bool PathExists(string revision, string path)
         {
             var commit = Resolve(revision);

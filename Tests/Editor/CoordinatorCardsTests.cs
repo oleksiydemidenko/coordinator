@@ -21,12 +21,40 @@ namespace Coordinator.Editor.Tests
             Assert.That(card, Does.Contain("**door-authority**: The host."));
             Assert.That(card, Does.Contain("Also open in the task, not blocking this assignment: `light-timing`"));
             Assert.That(card, Does.Contain("`compile <snapshot>`").And.Contain("`<snapshot>`: Compiler snapshot"));
-            Assert.That(card, Does.Contain("git diff --no-renames --name-only abc1234 -- . ':(exclude,glob)Assets/Scripts/Doors/**'"));
+            Assert.That(card, Does.Contain("git diff --no-renames --name-only integration/doors...HEAD -- . ':(exclude,glob)Assets/Scripts/Doors/**'"));
+            Assert.That(card, Does.Contain("not part of your delivery").And.Contain("```bash\ngit status --porcelain\n```"));
+            Assert.That(card, Does.Contain("started from `coordination/doors-start` (`abc1234`) or the tip of the task branch `integration/doors`."));
             Assert.That(card, Does.Contain("`judgments`").And.Contain("Do not log your actions"));
             Assert.That(card, Does.Contain("git show develop:Coordinator/Tasks/doors/Cards/door-rules.md"));
-            Assert.That(card, Does.Contain("never push").And.Contain("git switch integration/doors\ngit merge --no-ff task/door-rules"));
+            Assert.That(card, Does.Contain("never push").And.Contain("git switch integration/doors\ngit merge --no-ff <accepted revision>"));
             Assert.That(card, Does.Contain("Never merge into `develop`"));
             Assert.That(card, Does.Not.Contain("\r"));
+        }
+
+        [Test]
+        public void ADependentCardStartsFromTheTaskBranchAndMergesTheAcceptedRevision()
+        {
+            using var project = new CoordinatorTestProject();
+            project.Assignments[1].dependsOn.outputs.Add(new CoordinatorOutputRef { assignment = "door-rules", output = "door-rules-code" });
+            project.Save();
+            CoordinatorJson.Write(Path.Combine(project.Paths.TaskFolder("doors"), "light-rules" + CoordinatorPaths.ReviewSuffix), new CoordinatorReviewRecord
+            {
+                assignment = "light-rules",
+                rounds = new List<CoordinatorReviewRoundRecord>
+                {
+                    new() { revision = "1111111", verdict = CoordinatorVerdicts.Returned },
+                    new() { revision = "2222222", verdict = CoordinatorVerdicts.Accepted, acceptedBy = "lead", instructedBy = "owner" }
+                }
+            });
+            var workspace = CoordinatorWorkspace.Load(project.Root);
+            var data = workspace.FindTask("doors");
+
+            var card = CoordinatorCards.Assignment(workspace.Project, data, data.Assignments[1]);
+
+            Assert.That(card, Does.Contain("started from the tip of the task branch `integration/doors` once the outputs this assignment waits for are merged there."));
+            Assert.That(card, Does.Not.Contain("abc1234`)"));
+            Assert.That(card, Does.Contain("git switch integration/doors\ngit merge --no-ff 2222222"));
+            Assert.That(card, Does.Contain("git rev-parse task/light-rules"));
         }
 
         [Test]

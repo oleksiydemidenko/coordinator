@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The scope check compares the delivered commits with the task branch.** It starts from the merge base of the task branch and the delivered revision (the task base while the task branch does not exist), so work a dependent card inherited from the task branch is not reported, and moving the task base does not change the answer. The task branch must contain the task base.
+  - Card commands use the task branch by name: `git diff --no-renames --name-only <task branch>...HEAD` for the zone and the reserved paths, a first line that prints only when the task branch is missing or does not contain the base, and `git status --porcelain` for uncommitted changes, which are not part of the delivery. The card's own commands no longer carry the base commit, so they do not go stale when the base moves.
+  - A card that waits for another card's output says it starts from the task branch tip.
+  - `scope` returns `delivered` (the commit range) and, with `checkout`, `uncommitted` (modified and untracked files, inside and outside the zone). Without `checkout` it checks the assignment's delivered revision, or `revision` when given.
+- **Acceptance records the scope check.** `record_review` with `accepted` runs it on the round's revision and writes one `checks` entry with the start, the revision and the result. A path outside the zone or a reserved path refuses acceptance with the paths, and the review file stays unchanged.
+- **The merge takes the reviewed commit.** The card's merge step merges the accepted revision taken from the review. A card whose executor branch has commits after the delivered revision shows "N commit(s) after the delivered revision are not reviewed"; a task branch that holds such commits shows "Merged past the accepted revision". The board and `board`, `task` and `card` queries show the problem.
 - **Approve All** in the window toolbar when two or more tasks are drafts: one dialog lists every draft with its assignment count and validation errors, and approves them all as one Undo step.
 
 ## 0.1.1

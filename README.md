@@ -30,8 +30,8 @@ Each file has one writer, so branches merge without conflicts.
 The open Unity Editor serves a transport-neutral API (`CoordinatorAgentApi`) through a local bridge. The MCP server in `Tools~/CoordinatorMcp` only forwards to it, so Coordinator works only with the Editor open:
 
 - `coordinator_status`: project, data and whether the Editor is reachable;
-- `coordinator_query`: `capabilities`, `tasks`, `board`, `task`, `card`, `validate`, `scope` (with `checkout`, checks an executor's worktree);
-- `coordinator_edit`: `create_task`, `update_task`, `set_decision`, `set_assignment`, `remove_assignment`, `cancel_assignment`, `record_review`, `generate_cards`. An edit that adds validation errors is rolled back. `approve_task` always refuses: a person approves in the window, and acceptance names the person who decided.
+- `coordinator_query`: `capabilities`, `tasks`, `board`, `task`, `card`, `validate`, `scope` (compares the delivered commits with the task branch; with `checkout`, also lists the executor's uncommitted changes);
+- `coordinator_edit`: `create_task`, `update_task`, `set_decision`, `set_assignment`, `remove_assignment`, `cancel_assignment`, `record_review`, `generate_cards`. An edit that adds validation errors is rolled back. `approve_task` always refuses: a person approves in the window, and acceptance names the person who decided. Acceptance runs the scope check on the accepted revision, records it in the review and is refused when a path leaves the zone.
 
 **Coordinator window > Agents** downloads the server for this package version from its GitHub release (checked against the release's SHA-256 list) into `~/.coordinator/mcp/<version>` and connects Claude Code or Codex. When the package version changes, connected agents are moved to the matching server automatically. Before the first release, a developer can publish the server from `Tools~/CoordinatorMcp` with `dotnet publish` into the same folder. Copy `Skills~/coordinator-workflow` into the project's skills folder; it explains the workflow and the record format to agents.
 

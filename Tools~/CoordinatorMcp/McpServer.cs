@@ -101,7 +101,8 @@ public static class McpServer
                 {
                     ["task"] = TextParameter("Task id."),
                     ["assignment"] = TextParameter("Assignment id."),
-                    ["checkout"] = TextParameter("For scope: absolute path of an executor's worktree to check against the assignment's zone."),
+                    ["checkout"] = TextParameter("For scope: absolute path of an executor's checkout; its HEAD commits are checked against the task branch and its uncommitted changes are listed."),
+                    ["revision"] = TextParameter("For scope without checkout: the commit to check; default the assignment's delivered revision."),
                     ["include_closed"] = new JsonObject { ["type"] = "boolean", ["description"] = "For board; default true." }
                 })),
             Tool("coordinator_edit", "Change tasks in the open Unity Editor as the lead. Records use the JSON format of the coordinator-workflow skill; an edit that adds validation errors is rolled back.", ActionSchema(

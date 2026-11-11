@@ -136,8 +136,33 @@ namespace Coordinator.Editor
             }
             else
                 status.State = CoordinatorAssignmentStates.Delivered;
+            Unreviewed(data.Task, status, branch, git);
             return status;
         }
+
+        private static void Unreviewed(CoordinatorTaskRecord task, CoordinatorAssignmentStatus status, string branch, CoordinatorGit git)
+        {
+            var revision = status.DeliveredRevision;
+            if (revision == null || status.State == CoordinatorAssignmentStates.InProgress || status.State == CoordinatorAssignmentStates.Returned)
+                return;
+            var tip = git.Resolve(branch);
+            if (tip == null || tip == revision || !git.IsAncestor(revision, tip))
+                return;
+            if (status.AcceptedRevision != null && !string.IsNullOrEmpty(task.integrationBranch))
+            {
+                var merged = git.MergeBase(tip, task.integrationBranch);
+                if (merged != null && merged != revision && git.IsAncestor(revision, merged))
+                {
+                    AddProblem(status, $"Merged past the accepted revision: {git.CountCommits(revision, merged)} commit(s) after it are in the task branch without review.");
+                    return;
+                }
+            }
+            AddProblem(status, $"{git.CountCommits(revision, tip)} commit(s) after the delivered revision are not reviewed: "
+                               + (status.AcceptedRevision != null ? "merge the accepted revision, not the branch, or deliver again." : "the review covers the delivered revision only; deliver again to include them."));
+        }
+
+        private static void AddProblem(CoordinatorAssignmentStatus status, string problem) =>
+            status.Problem = string.IsNullOrEmpty(status.Problem) ? problem : status.Problem + " " + problem;
 
         private static void Readiness(
             CoordinatorTaskData data,

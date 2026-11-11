@@ -338,6 +338,12 @@ namespace Coordinator.Editor
                     : card.Assignment.executor?.branch;
                 if (!string.IsNullOrEmpty(details))
                     EditorGUILayout.LabelField(details, EditorStyles.wordWrappedMiniLabel);
+                if (!string.IsNullOrEmpty(card.Status?.Problem))
+                {
+                    GUI.contentColor = WarningColor;
+                    EditorGUILayout.LabelField(card.Status.Problem, EditorStyles.wordWrappedMiniLabel);
+                    GUI.contentColor = previous;
+                }
             }
             var rect = GUILayoutUtility.GetLastRect();
             EditorGUIUtility.AddCursorRect(rect, MouseCursor.Link);
@@ -393,6 +399,8 @@ namespace Coordinator.Editor
             }
             detailStyle ??= new GUIStyle(EditorStyles.wordWrappedLabel) { richText = false, font = EditorStyles.label.font };
         }
+
+        private static Color WarningColor => EditorGUIUtility.isProSkin ? new Color(1f, 0.75f, 0.3f) : new Color(0.7f, 0.4f, 0f);
 
         private static Color StateColor(string state)
         {
