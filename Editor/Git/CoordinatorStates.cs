@@ -40,11 +40,26 @@ namespace Coordinator.Editor
         public string Problem { get; internal set; }
     }
 
+    public sealed class CoordinatorRequirementChange
+    {
+        public string Path { get; internal set; } = string.Empty;
+        public string Recorded { get; internal set; } = string.Empty;
+        public List<string> Commits { get; } = new();
+
+        public string Text(string targetBranch) =>
+            Commits.Count == 0
+                ? $"Requirement changed: the recorded revision {Short(Recorded)} of {Path} is not in this repository."
+                : $"Requirement changed: {Path} has {Commits.Count} commit(s) on {targetBranch} since {Short(Recorded)} ({string.Join(", ", Commits.Take(3).Select(Short))}{(Commits.Count > 3 ? ", …" : "")}).";
+
+        private static string Short(string commit) => commit.Length > 8 ? commit.Substring(0, 8) : commit;
+    }
+
     public sealed class CoordinatorTaskStatus
     {
         public string TaskId { get; internal set; } = string.Empty;
         public string State { get; internal set; } = string.Empty;
         public List<CoordinatorAssignmentStatus> Assignments { get; } = new();
+        public List<CoordinatorRequirementChange> RequirementChanges { get; } = new();
 
         public CoordinatorAssignmentStatus Find(string assignmentId) =>
             Assignments.FirstOrDefault(status => status.AssignmentId == assignmentId);
@@ -77,7 +92,45 @@ namespace Coordinator.Editor
                 : active.Any(item => item.State != CoordinatorAssignmentStates.Ready && item.State != CoordinatorAssignmentStates.Blocked)
                     ? CoordinatorTaskStates.InWork
                 : CoordinatorTaskStates.Approved;
+            if (task.approval != null && status.State != CoordinatorTaskStates.Closed && status.State != CoordinatorTaskStates.Cancelled)
+                RequirementChanges(task, status, git);
             return status;
+        }
+
+        private static void RequirementChanges(CoordinatorTaskRecord task, CoordinatorTaskStatus status, CoordinatorGit git)
+        {
+            var sources = task.sources.Where(source => !string.IsNullOrEmpty(source.revision) && !string.IsNullOrEmpty(source.path)).ToArray();
+            if (sources.Length == 0 || git.Resolve(task.targetBranch) == null)
+                return;
+            var current = git.Blobs(task.targetBranch, sources.Select(source => source.path).ToArray());
+            foreach (var source in sources)
+            {
+                var recorded = git.Resolve(source.revision);
+                var change = new CoordinatorRequirementChange { Path = source.path, Recorded = source.revision };
+                if (recorded == null)
+                {
+                    status.RequirementChanges.Add(change);
+                    continue;
+                }
+                current.TryGetValue(source.path, out var now);
+                git.Blobs(recorded, new[] { source.path }).TryGetValue(source.path, out var then);
+                if (now == then)
+                    continue;
+                var answered = task.decisions
+                    .Where(decision => decision.state == CoordinatorDecisionStates.Decided && decision.record?.path == source.path && !string.IsNullOrEmpty(decision.record.revision))
+                    .Select(decision => git.Resolve(decision.record.revision))
+                    .Where(commit => commit != null)
+                    .ToArray();
+                foreach (var commit in git.CommitsTouching(task.targetBranch, source.path))
+                {
+                    if (commit == recorded || git.IsAncestor(commit, recorded))
+                        break;
+                    if (!answered.Any(known => commit == known || git.IsAncestor(commit, known)))
+                        change.Commits.Add(commit);
+                }
+                if (change.Commits.Count > 0)
+                    status.RequirementChanges.Add(change);
+            }
         }
 
         private static CoordinatorAssignmentStatus Delivery(CoordinatorTaskData data, CoordinatorAssignmentRecord assignment, CoordinatorGit git)

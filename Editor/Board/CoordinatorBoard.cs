@@ -9,6 +9,7 @@ namespace Coordinator.Editor
         public CoordinatorTaskData Task { get; internal set; }
         public CoordinatorAssignmentRecord Assignment { get; internal set; }
         public CoordinatorAssignmentStatus Status { get; internal set; }
+        public CoordinatorTaskStatus TaskStatus { get; internal set; }
         public string State => Status?.State ?? string.Empty;
         public string Key => Task.Task.id + "/" + Assignment.id;
     }
@@ -53,7 +54,7 @@ namespace Coordinator.Editor
                 statuses.TryGetValue(data.Task.id, out var taskStatus);
                 foreach (var assignment in data.Assignments)
                 {
-                    var card = new CoordinatorBoardCard { Task = data, Assignment = assignment, Status = taskStatus?.Find(assignment.id) };
+                    var card = new CoordinatorBoardCard { Task = data, Assignment = assignment, Status = taskStatus?.Find(assignment.id), TaskStatus = taskStatus };
                     if (!includeFinished && (card.State == CoordinatorAssignmentStates.Closed || card.State == CoordinatorAssignmentStates.Cancelled))
                         continue;
                     var primary = assignment.disciplines.FirstOrDefault();

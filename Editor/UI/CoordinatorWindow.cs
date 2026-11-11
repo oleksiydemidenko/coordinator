@@ -221,7 +221,7 @@ namespace Coordinator.Editor
             if (workspace != null && workspace.Tasks.Count > 0)
             {
                 var tasks = new[] { string.Empty }.Concat(workspace.Tasks.Select(task => task.Task.id)).ToArray();
-                var labels = new[] { "All tasks" }.Concat(workspace.Tasks.Select(task => $"{task.Task.title} · {(statuses.TryGetValue(task.Task.id, out var status) ? status.State : "?")}")).ToArray();
+                var labels = new[] { "All tasks" }.Concat(workspace.Tasks.Select(task => $"{task.Task.title} · {(statuses.TryGetValue(task.Task.id, out var status) ? status.State + (status.RequirementChanges.Count > 0 ? " · requirement changed" : "") : "?")}")).ToArray();
                 var index = Mathf.Max(0, Array.IndexOf(tasks, taskFilter));
                 var chosen = EditorGUILayout.Popup(index, labels, EditorStyles.toolbarPopup, GUILayout.Width(260f));
                 var finished = GUILayout.Toggle(showFinished, "Closed", EditorStyles.toolbarButton, GUILayout.Width(56f));
@@ -342,6 +342,13 @@ namespace Coordinator.Editor
                 {
                     GUI.contentColor = WarningColor;
                     EditorGUILayout.LabelField(card.Status.Problem, EditorStyles.wordWrappedMiniLabel);
+                    GUI.contentColor = previous;
+                }
+                if (card.TaskStatus?.RequirementChanges.Count > 0)
+                {
+                    GUI.contentColor = WarningColor;
+                    foreach (var change in card.TaskStatus.RequirementChanges)
+                        EditorGUILayout.LabelField(change.Text(card.Task.Task.targetBranch), EditorStyles.wordWrappedMiniLabel);
                     GUI.contentColor = previous;
                 }
             }

@@ -83,6 +83,7 @@ namespace Coordinator.Editor
             if (data.Task.approval != null)
                 return CoordinatorAgentResult.Fail("already_approved", $"Task '{taskId}' is already approved.");
             data.Task.approval = new CoordinatorSignatureRecord { by = person, date = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) };
+            RecordSourceRevisions(Git(projectRoot), data.Task);
             return Commit(projectRoot, $"Task '{taskId}' approved by {person}.", Documents((TaskFile(projectRoot, taskId), data.Task)));
         }
 
@@ -91,17 +92,36 @@ namespace Coordinator.Editor
             var workspace = CoordinatorWorkspace.Load(projectRoot);
             var date = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             var documents = new Dictionary<string, object>();
+            var git = Git(projectRoot);
             foreach (var taskId in taskIds)
             {
                 var data = workspace.FindTask(taskId) ?? throw new CoordinatorAgentException("task_not_found", $"No task '{taskId}'.");
                 if (data.Task.approval != null || data.Task.cancelled != null)
                     continue;
                 data.Task.approval = new CoordinatorSignatureRecord { by = person, date = date };
+                RecordSourceRevisions(git, data.Task);
                 documents[TaskFile(projectRoot, taskId)] = data.Task;
             }
             if (documents.Count == 0)
                 return CoordinatorAgentResult.Fail("nothing_to_approve", "No draft task to approve.");
             return Commit(projectRoot, $"{documents.Count} task(s) approved by {person}.", documents);
+        }
+
+        private static void RecordSourceRevisions(CoordinatorGit git, CoordinatorTaskRecord task)
+        {
+            if (git == null)
+                return;
+            foreach (var source in task.sources.Where(source => !string.IsNullOrEmpty(source.path)))
+            {
+                try
+                {
+                    source.revision = git.CommitsTouching(task.targetBranch, source.path).FirstOrDefault();
+                }
+                catch (CoordinatorGitException)
+                {
+                    source.revision = null;
+                }
+            }
         }
 
         private static CoordinatorAgentResult Capabilities()
@@ -127,6 +147,7 @@ namespace Coordinator.Editor
                     "record_review with verdict accepted runs the scope check on the round's revision against the task branch and records it in checks; a path outside the zone or a reserved path refuses acceptance.",
                     "scope compares the delivered commits with the task branch (merge base to revision); with checkout it also lists uncommitted changes, which are not part of the delivery.",
                     "States are computed from git: never write them. Executors write their delivery file in their own branch.",
+                    "Approval records in each task source the commit that last changed its file on the target branch. A newer commit marks the task 'requirement changed'; a decided decision whose record names that path and a revision at or after the change answers it, or the lead sets the source's revision with update_task.",
                     "Changing a task after approval keeps the approval; tell the user what changed."
                 }
             });
@@ -149,7 +170,8 @@ namespace Coordinator.Editor
                         lead = data.Task.lead,
                         target_branch = data.Task.targetBranch,
                         assignments = data.Assignments.Count,
-                        open_decisions = data.Task.decisions.Where(decision => decision.state == CoordinatorDecisionStates.Open).Select(decision => decision.id).ToArray()
+                        open_decisions = data.Task.decisions.Where(decision => decision.state == CoordinatorDecisionStates.Open).Select(decision => decision.id).ToArray(),
+                        requirement_changes = RequirementChanges(status, data.Task)
                     };
                 }).ToArray()
             });
@@ -173,6 +195,9 @@ namespace Coordinator.Editor
                         state = card.State,
                         blocked_by = card.Status?.BlockedBy.Count > 0 ? card.Status.BlockedBy : null,
                         problem = card.Status?.Problem,
+                        requirement_changed = card.TaskStatus?.RequirementChanges.Count > 0
+                            ? card.TaskStatus.RequirementChanges.Select(change => change.Text(card.Task.Task.targetBranch)).ToArray()
+                            : null,
                         executor = card.Assignment.executor?.handle
                     }).ToArray()
                 }).ToArray()
@@ -189,6 +214,7 @@ namespace Coordinator.Editor
             return CoordinatorAgentResult.Ok("Coordinator task.", new
             {
                 state = status?.State,
+                requirement_changes = RequirementChanges(status, data.Task),
                 task = Json(data.Task),
                 assignments = data.Assignments.Select(assignment =>
                 {
@@ -280,6 +306,17 @@ namespace Coordinator.Editor
             });
         }
 
+        private static object[] RequirementChanges(CoordinatorTaskStatus status, CoordinatorTaskRecord task) =>
+            status == null || status.RequirementChanges.Count == 0
+                ? null
+                : status.RequirementChanges.Select(change => (object)new
+                {
+                    path = change.Path,
+                    recorded = change.Recorded,
+                    commits = change.Commits,
+                    text = change.Text(task.targetBranch)
+                }).ToArray();
+
         private static object ScopeJson(CoordinatorScopeReport report) => new
         {
             clean = report.Clean,
@@ -308,6 +345,16 @@ namespace Coordinator.Editor
             var existing = LoadTask(root, task.id);
             task.approval = existing.Task.approval;
             task.cancelled = existing.Task.cancelled;
+            if (task.approval != null)
+            {
+                var git = Git(root);
+                foreach (var source in task.sources.Where(source => string.IsNullOrEmpty(source.revision)))
+                {
+                    source.revision = existing.Task.sources.FirstOrDefault(known => known.path == source.path)?.revision;
+                    if (source.revision == null && git != null)
+                        RecordSourceRevisions(git, new CoordinatorTaskRecord { targetBranch = task.targetBranch, sources = new List<CoordinatorDocumentRef> { source } });
+                }
+            }
             return Commit(root, $"Task '{task.id}' updated.", Documents((TaskFile(root, task.id), task)));
         }
 

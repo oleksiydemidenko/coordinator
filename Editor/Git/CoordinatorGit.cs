@@ -115,6 +115,44 @@ namespace Coordinator.Editor
             return count;
         }
 
+        public IReadOnlyDictionary<string, string> Blobs(string revision, IReadOnlyCollection<string> paths)
+        {
+            var blobs = new Dictionary<string, string>(StringComparer.Ordinal);
+            var commit = Resolve(revision);
+            if (commit == null)
+                return blobs;
+            var missing = new List<string>();
+            foreach (var path in paths.Distinct())
+            {
+                if (CoordinatorGitMemo.TryGet("blob|" + commit + "|" + path, out var known))
+                {
+                    if (known != CoordinatorGitMemo.Missing)
+                        blobs[path] = known;
+                }
+                else
+                    missing.Add(path);
+            }
+            if (missing.Count == 0)
+                return blobs;
+            var listed = new Dictionary<string, string>(StringComparer.Ordinal);
+            var output = Run(new[] { "ls-tree", "-z", "--full-tree", commit, "--" }.Concat(missing).ToArray()).Output;
+            foreach (var entry in output.Split(new[] { '\0' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var tab = entry.IndexOf('\t');
+                var fields = tab < 0 ? Array.Empty<string>() : entry.Substring(0, tab).Split(' ');
+                if (fields.Length == 3 && fields[1] == "blob")
+                    listed[entry.Substring(tab + 1)] = fields[2];
+            }
+            foreach (var path in missing)
+            {
+                listed.TryGetValue(path, out var blob);
+                CoordinatorGitMemo.Set("blob|" + commit + "|" + path, blob ?? CoordinatorGitMemo.Missing);
+                if (blob != null)
+                    blobs[path] = blob;
+            }
+            return blobs;
+        }
+
         public bool PathExists(string revision, string path)
         {
             var commit = Resolve(revision);

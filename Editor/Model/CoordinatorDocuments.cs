@@ -125,6 +125,7 @@ namespace Coordinator.Editor
         public List<string> sections;
         public List<string> requirements;
         public string note;
+        public string revision;
     }
 
     [Serializable]
@@ -166,6 +167,7 @@ namespace Coordinator.Editor
         public string path;
         public string section;
         public string layer;
+        public string revision;
     }
 
     [Serializable]
