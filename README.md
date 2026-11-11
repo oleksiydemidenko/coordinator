@@ -1,6 +1,6 @@
 # Coordinator
 
-Agent task cards for Unity projects. In development; nothing is released yet.
+Agent task cards for Unity projects. Released: 0.1.1 (see the [changelog](CHANGELOG.md)). The model, validation, git-computed states, cards, agent access and the MCP server are complete; the window is a draft until its final design.
 
 Coordinator is for parallel work of agents on one task, in one discipline or several. A lead splits a task from the technical design into assignments; each is taken by an operator, the person who runs an executor agent for it. Every assignment states what to read, its inputs and outputs, the only paths it may change, its route and its acceptance. Shared decisions are made before parallel work starts. Progress is computed from git, so no server is needed.
 
