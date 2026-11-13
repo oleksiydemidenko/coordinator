@@ -238,7 +238,7 @@ namespace Coordinator.Editor
                     && GUILayout.Button("Approve…", EditorStyles.toolbarButton, GUILayout.Width(70f)))
                     Approve(selectedTask);
                 var drafts = workspace.Tasks.Where(task => task.Task.approval == null && task.Task.cancelled == null).ToArray();
-                if (drafts.Length > 1 && GUILayout.Button($"Approve All ({drafts.Length})…", EditorStyles.toolbarButton, GUILayout.Width(118f)))
+                if (drafts.Length > 0 && GUILayout.Button($"Approve All ({drafts.Length})…", EditorStyles.toolbarButton, GUILayout.Width(118f)))
                     ApproveAll(drafts);
             }
             GUILayout.FlexibleSpace();
