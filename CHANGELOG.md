@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.4
+
+- **Same package as 0.2.3, with server binaries.** The 0.2.3 release build stopped on Linux and macOS: its smoke test held the write lock with a plain open file, which .NET does not see there (it locks with an advisory `flock`). The test now takes a `flock` on those systems. Nothing else changed.
+- **Known limit.** On Linux and macOS the write lock works between command line processes; whether the Unity Editor's Mono runtime honours the same `flock` is not checked yet.
+
 ## 0.2.3
 
 - **Edits without the Editor.** `coordinator-mcp edit` runs the same `CoordinatorAgentApi.Edit` on the Coordinator files when the Editor bridge does not answer, with the same validation and rollback. `approve_task` still refuses. The MCP server's `coordinator_edit` does the same; `coordinator_status` adds `writes_without_editor`.

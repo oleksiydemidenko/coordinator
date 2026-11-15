@@ -14,6 +14,18 @@ import tempfile
 import threading
 import time
 
+if os.name != "nt":
+    import fcntl
+
+
+def hold_lock(path):
+    # .NET takes the write lock with FileShare.None: on Windows any open handle blocks it, on Linux and macOS only an
+    # advisory flock does, so the test takes one there.
+    handle = open(path, "a")
+    if os.name != "nt":
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return handle
+
 server = os.path.abspath(sys.argv[1])
 project = tempfile.mkdtemp()
 for folder in ("Assets", "ProjectSettings", "Coordinator/Tasks"):
@@ -110,7 +122,7 @@ code, text = cli("query", "task", "--task", "smoke")
 assert code == 0 and json.loads(text)["data"]["task"]["title"] == "Smoke", text
 
 # One writer at a time: while another process holds the write lock, an edit waits, then answers busy and changes nothing.
-lock = open(os.path.join(project, "Library", "Coordinator", "write.lock"), "a")
+lock = hold_lock(os.path.join(project, "Library", "Coordinator", "write.lock"))
 try:
     started = time.time()
     code, text = cli("edit", "update_task", "--task", json.dumps(dict(record, title="Changed")))
