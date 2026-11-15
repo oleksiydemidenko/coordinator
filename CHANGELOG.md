@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Command line.** The server binary is also a command line, like Architector's: `coordinator-mcp status`, `query <action> --<parameter> <value>`, `edit <action> --<parameter> <value|file.json|JSON>`, `commands` and `help`. Each call answers one line of JSON through the same Editor bridge and exits with 0 success, 1 internal error, 2 usage, 4 no Unity project, 6 `success: false` or 7 Editor not reachable. Agents with a shell reach Coordinator without a registered MCP server. Without a command the binary is the MCP server as before; `coordinator_status` adds `cli`, the binary's path.
 - **Approve All shows with one draft too.** The toolbar button appears whenever at least one task is a draft, so a single draft is approved without first picking it in the task filter.
 
 ## 0.2.0

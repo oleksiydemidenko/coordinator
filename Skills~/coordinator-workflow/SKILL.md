@@ -11,14 +11,14 @@ Coordinator keeps parallel work in `Coordinator/` at the project root: a task, i
 
 Coordinator is for parallel work of agents on one task, in one discipline or several. A narrow change one agent does alone needs no task.
 
-- **Lead**: one per project. Splits the task, makes or records decisions, reviews every card and, at the end, the whole task branch. Works through the open Unity Editor with `coordinator_query` and `coordinator_edit`.
+- **Lead**: one per project. Splits the task, makes or records decisions, reviews every card and, at the end, the whole task branch. Works through the open Unity Editor with `coordinator_query` and `coordinator_edit`, or, with a shell and no MCP server, with the same binary as a command line: `coordinator-mcp query <action> --<parameter> <value>` and `coordinator-mcp edit <action> ...` (records as a `.json` file or JSON text). Each call prints one line of JSON; exit code 6 means `success: false`, 7 the Editor is not reachable. The binary is in `~/.coordinator/mcp/<version>/`; `coordinator-mcp help` lists the commands.
 - **Operator**: the person who takes an assignment and runs agents for it (a developer, an artist, the sound designer). Checks the result, hands the card in to the lead, pushes and opens pull requests. An agent never pushes.
 - **Executor**: the operator's main agent for one assignment. If the operator splits the work across several agent sessions, the executor orchestrates them and merges their work into its branch. Reads its card, changes only its zone, writes its delivery file. Its `environment` is `worktree` (its own git worktree without Unity) or `editor` (the operator's checkout with the Unity Editor open, which sound work always needs).
 - **Person with authority**: approves the split and decides acceptance. An agent never approves a task, never accepts its own work and never widens its own zone.
 
 ## Lead
 
-1. `coordinator_query` `capabilities`, then `board` or `tasks`.
+1. `coordinator_query` `capabilities`, then `board` or `tasks` (command line: `coordinator-mcp query capabilities`, `coordinator-mcp query board`).
 2. Read the technical design the task delivers. Find the shared contracts first: each becomes a **decision**. Decide it with the user, or keep it `open`; record a one- or two-line `answer` and a `record` link (document section or Architector layer). Do not copy the full text.
 3. Split the rest into **assignments**: one executor, one write zone, one checkable output. Discipline is an attribute, not the boundary. An assignment whose method is not yet decided depends on its decision.
 4. `create_task` (a draft), then `set_decision` and `set_assignment`. Every edit is validated; an edit that adds errors is rolled back and returns them. Fix and resend.

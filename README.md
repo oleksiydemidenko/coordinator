@@ -33,6 +33,21 @@ The open Unity Editor serves a transport-neutral API (`CoordinatorAgentApi`) thr
 - `coordinator_query`: `capabilities`, `tasks`, `board`, `task`, `card`, `validate`, `scope` (compares the delivered commits with the task branch; with `checkout`, also lists the executor's uncommitted changes);
 - `coordinator_edit`: `create_task`, `update_task`, `set_decision`, `set_assignment`, `remove_assignment`, `cancel_assignment`, `record_review`, `generate_cards`. An edit that adds validation errors is rolled back. `approve_task` always refuses: a person approves in the window, and acceptance names the person who decided. Acceptance runs the scope check on the accepted revision, records it in the review and is refused when a path leaves the zone.
 
+The same binary is also a command line, for agents that run shell commands and have no MCP server registered. With a command it answers one line of JSON and exits; without one it is the MCP server, so an MCP registration (`--project <path>` or a bare project folder) keeps working:
+
+```
+coordinator-mcp status
+coordinator-mcp query capabilities
+coordinator-mcp query board --include_closed false
+coordinator-mcp query card --task <task> --assignment <assignment>
+coordinator-mcp edit set_assignment --task <task> --assignment assignment.json
+coordinator-mcp help
+```
+
+`query` and `edit` take any action of `coordinator_query` and `coordinator_edit`, with each parameter as `--<name> <value>`. A record parameter (`--task` for `create_task` and `update_task`, `--assignment` for `set_assignment`, `--decision`, `--round`) takes a `.json` file or JSON text; `true` and `false` are booleans; everything else, numbers too, is text. The project is the Unity project that contains the current folder, or `--project <path>`; `--pretty` indents the JSON. `status` includes the binary's own path (`cli`), so an agent connected over MCP can find the command line. `commands` lists the commands as JSON. Exit codes: 0 success, 1 internal error, 2 usage, 4 no Unity project, 6 the reply has `success: false`, 7 the Unity Editor is not reachable (not open, or compiling; retry when it is open).
+
+The Editor side is the same for both: the bridge starts with every Editor that is not in batch mode and writes its port and token to `Library/Coordinator/agent-bridge.json`; nothing has to be enabled.
+
 **Coordinator window > Agents** downloads the server for this package version from its GitHub release (checked against the release's SHA-256 list) into `~/.coordinator/mcp/<version>` and connects Claude Code or Codex. When the package version changes, connected agents are moved to the matching server automatically. Before the first release, a developer can publish the server from `Tools~/CoordinatorMcp` with `dotnet publish` into the same folder. Copy `Skills~/coordinator-workflow` into the project's skills folder; it explains the workflow and the record format to agents.
 
 ## License
