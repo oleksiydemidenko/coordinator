@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.3
 
 - **Edits without the Editor.** `coordinator-mcp edit` runs the same `CoordinatorAgentApi.Edit` on the Coordinator files when the Editor bridge does not answer, with the same validation and rollback. `approve_task` still refuses. The MCP server's `coordinator_edit` does the same; `coordinator_status` adds `writes_without_editor`.
 - **No queue on one Editor.** By default a read or an edit goes to the files at once when the bridge does not answer now, instead of waiting for a recompile. A busy Editor gets 5 s to start a call (`claim_seconds`); a call it does not start is cancelled there and runs on the files. `--source editor` keeps the wait (`--wait`, default 60). `--source files` now works for edits too.
