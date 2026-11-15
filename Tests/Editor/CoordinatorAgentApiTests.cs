@@ -209,5 +209,46 @@ namespace Coordinator.Editor.Tests
                 Directory.Delete(worktree, true);
             }
         }
+
+        [Test]
+        public void ASecondWriterWaitsForTheWriteLockThenAnswersBusyAndChangesNothing()
+        {
+            var wait = CoordinatorWriteLock.WaitMilliseconds;
+            var lockPath = CoordinatorWriteLock.LockPath(project.Root);
+            Directory.CreateDirectory(Path.GetDirectoryName(lockPath));
+            CoordinatorWriteLock.WaitMilliseconds = 200;
+            try
+            {
+                using (new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+                {
+                    var result = Edit(new { action = "create_task", task = Json(project.Task) });
+
+                    Assert.That(result.Code, Is.EqualTo("busy"));
+                    Assert.That(File.Exists(Path.Combine(project.Paths.TaskFolder("doors"), CoordinatorPaths.TaskFile)), Is.False);
+                }
+                Assert.That(Edit(new { action = "create_task", task = Json(project.Task) }).Success, Is.True, "The lock is free again.");
+            }
+            finally
+            {
+                CoordinatorWriteLock.WaitMilliseconds = wait;
+            }
+        }
+
+        [Test]
+        public void AnEditTheCommandLineMadeJoinsTheEditorHistoryAndUndoes()
+        {
+            var path = Path.Combine(project.Paths.TaskFolder("doors"), CoordinatorPaths.TaskFile);
+            CoordinatorJson.Write(path, project.Task);
+            CoordinatorHistoryInbox.Write(project.Root, "Task 'doors' created as a draft. A person approves it.", new System.Collections.Generic.Dictionary<string, string> { [path] = null });
+
+            Assert.That(CoordinatorHistoryInbox.HasEntries(project.Root), Is.True);
+            foreach (var entry in CoordinatorHistoryInbox.Take(project.Root))
+                CoordinatorHistory.Import(entry);
+
+            Assert.That(CoordinatorHistoryInbox.HasEntries(project.Root), Is.False);
+            Assert.That(CoordinatorHistory.NextUndoName, Is.EqualTo("Task 'doors' created as a draft"));
+            Assert.That(CoordinatorHistory.Undo(), Does.StartWith("Undone"));
+            Assert.That(File.Exists(path), Is.False);
+        }
     }
 }

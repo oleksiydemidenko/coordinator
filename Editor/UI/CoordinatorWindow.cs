@@ -129,6 +129,13 @@ namespace Coordinator.Editor
             RebuildBoard();
         }
 
+        // The same edit an agent runs: under the write lock, on the files as they are now.
+        private static string GenerateCards()
+        {
+            var result = CoordinatorAgentApi.Edit(new Newtonsoft.Json.Linq.JObject { ["action"] = "generate_cards" }, ProjectRoot);
+            return result.Success ? $"{Newtonsoft.Json.Linq.JObject.FromObject(result.Data)["written"]} card file(s) written." : result.Message;
+        }
+
         private static string Guarded(Action step)
         {
             try
@@ -232,7 +239,7 @@ namespace Coordinator.Editor
                     RebuildBoard();
                 }
                 if (GUILayout.Button("Generate Cards", EditorStyles.toolbarButton, GUILayout.Width(104f)))
-                    notice = $"{CoordinatorCards.WriteAll(workspace)} card file(s) written.";
+                    notice = GenerateCards();
                 var selectedTask = workspace.FindTask(taskFilter);
                 if (selectedTask != null && selectedTask.Task.approval == null && selectedTask.Task.cancelled == null
                     && GUILayout.Button("Approve…", EditorStyles.toolbarButton, GUILayout.Width(70f)))

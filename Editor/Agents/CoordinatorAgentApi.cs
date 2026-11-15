@@ -61,6 +61,21 @@ namespace Coordinator.Editor
             var action = (string)parameters?["action"] ?? string.Empty;
             try
             {
+                // One writer at a time: the Editor and every command line take the same lock for the whole change.
+                return action == "approve_task" || !EditActions.Contains(action)
+                    ? EditUnlocked(root, action, parameters)
+                    : CoordinatorWriteLock.Run(root, () => EditUnlocked(root, action, parameters));
+            }
+            catch (CoordinatorAgentException exception)
+            {
+                return CoordinatorAgentResult.Fail(exception.Code, exception.Message);
+            }
+        }
+
+        private static CoordinatorAgentResult EditUnlocked(string root, string action, JObject parameters)
+        {
+            try
+            {
                 return action switch
                 {
                     "create_task" => CreateTask(root, Record<CoordinatorTaskRecord>(parameters, "task")),
@@ -86,6 +101,18 @@ namespace Coordinator.Editor
 
         public static CoordinatorAgentResult ApproveByPerson(string projectRoot, string taskId, string person)
         {
+            try
+            {
+                return CoordinatorWriteLock.Run(projectRoot, () => ApproveByPersonUnlocked(projectRoot, taskId, person));
+            }
+            catch (CoordinatorAgentException exception)
+            {
+                return CoordinatorAgentResult.Fail(exception.Code, exception.Message);
+            }
+        }
+
+        private static CoordinatorAgentResult ApproveByPersonUnlocked(string projectRoot, string taskId, string person)
+        {
             var data = LoadTask(projectRoot, taskId);
             if (data.Task.approval != null)
                 return CoordinatorAgentResult.Fail("already_approved", $"Task '{taskId}' is already approved.");
@@ -95,6 +122,18 @@ namespace Coordinator.Editor
         }
 
         public static CoordinatorAgentResult ApproveAllByPerson(string projectRoot, IReadOnlyList<string> taskIds, string person)
+        {
+            try
+            {
+                return CoordinatorWriteLock.Run(projectRoot, () => ApproveAllByPersonUnlocked(projectRoot, taskIds, person));
+            }
+            catch (CoordinatorAgentException exception)
+            {
+                return CoordinatorAgentResult.Fail(exception.Code, exception.Message);
+            }
+        }
+
+        private static CoordinatorAgentResult ApproveAllByPersonUnlocked(string projectRoot, IReadOnlyList<string> taskIds, string person)
         {
             var workspace = CoordinatorWorkspace.Load(projectRoot);
             var date = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -150,6 +189,7 @@ namespace Coordinator.Editor
                     "Records use the JSON fields of the coordinator-workflow skill; unknown fields are rejected.",
                     "An edit that adds validation errors is rolled back and returns them.",
                     "Only a person approves a task. approve_task always refuses; the user approves in the Coordinator window.",
+                    "An edit runs in the open Editor when its bridge answers, otherwise in the command line on the Coordinator files, with the same checks. One writer at a time: a second writer waits up to 10 s, then gets busy.",
                     "record_review with verdict accepted needs acceptedBy and instructedBy, the person who decided to accept.",
                     "record_review with verdict accepted runs the scope check on the round's revision against the task branch and records it in checks; a path outside the zone or a reserved path refuses acceptance.",
                     "scope compares the delivered commits with the task branch (merge base to revision); with checkout it also lists uncommitted changes, which are not part of the delivery.",
@@ -485,6 +525,8 @@ namespace Coordinator.Editor
             {
 #if UNITY_EDITOR
                 CoordinatorHistory.Record(message, backups);
+#else
+                CoordinatorHistoryInbox.Write(root, message, backups);
 #endif
                 return CoordinatorAgentResult.Ok(message, new { warnings = Diagnostics(after.Where(diagnostic => !diagnostic.IsError)) });
             }

@@ -6,8 +6,8 @@ using System.Text.Json.Nodes;
 public static partial class McpServer
 {
     // Exit codes: 0 success, 1 internal error, 2 usage error, 4 setup missing (no Unity project),
-    // 6 the operation answered with success=false, 7 the Unity Editor is not reachable after the wait (an edit, or a query
-    // with --source editor; safe to retry once it is open).
+    // 6 the operation answered with success=false, 7 the Unity Editor is not reachable with --source editor after the wait,
+    // or it took an edit and gave no answer (check with a query before you repeat it).
     private const int ExitOk = 0;
     private const int ExitInternal = 1;
     private const int ExitUsage = 2;
@@ -23,19 +23,22 @@ public static partial class McpServer
             "Any coordinator_query action: capabilities, tasks, board, task, card, validate, scope. "
             + "For example: query board --include_closed false, query task --task SLB-002, query card --task SLB-002 --assignment A1, "
             + "query scope --task SLB-002 --assignment A1 --checkout F:/path/to/worktree. "
-            + "The open Unity Editor answers. While Unity runs for the project but does not answer (a recompile, a domain reload), the call waits for it, "
-            + "--wait seconds (default " + DefaultWaitSeconds + "). Without an Editor the same query is answered from the Coordinator files and git; the reply's source is editor or files. "
-            + "--source editor never reads the files, --source files never asks the Editor. "
+            + "The open Unity Editor answers when its bridge answers now; otherwise the same query is answered at once from the Coordinator files and git "
+            + "(no Editor, a recompile, a domain reload). The reply's source is editor or files. "
+            + "--source editor waits for the Editor instead, --wait seconds (default " + DefaultWaitSeconds + "), and never reads the files; --source files never asks the Editor. "
             + "In a linked git worktree the project is its main checkout, and scope without --checkout or --revision checks the worktree.",
             false, new[] { "task", "assignment", "checkout", "revision", "include_closed", "wait", "source" }),
         new("edit", "edit <action> [--<parameter> <value|file.json|JSON>]...",
-            "Any coordinator_edit action through the open Unity Editor as the lead: create_task, update_task, set_decision, set_assignment, remove_assignment, "
+            "Any coordinator_edit action as the lead: create_task, update_task, set_decision, set_assignment, remove_assignment, "
             + "cancel_assignment, record_review, generate_cards, approve_task. A record parameter (--task for create_task and update_task, --assignment for set_assignment, "
             + "--decision, --round) takes a .json file or JSON text in the format of the coordinator-workflow skill. "
             + "An edit that adds validation errors is rolled back and answers validation_failed with the errors; query validate checks the data without a change. "
             + "Only a person approves a task, in the Coordinator window. "
-            + "While Unity runs for the project but does not answer, the call waits for it like query (--wait seconds, default " + DefaultWaitSeconds + "); then exit 7.",
-            true, new[] { "task", "assignment", "decision", "round", "by", "reason", "wait" }),
+            + "The open Unity Editor runs the edit when its bridge answers now; otherwise the command line runs the same edit on the Coordinator files at once, "
+            + "with the same checks and rollback, and the open Editor takes it into its Undo history and reloads the window. "
+            + "One writer at a time: a second writer waits up to 10 s for the write lock, then answers busy. "
+            + "--source editor waits for the Editor instead (--wait seconds, default " + DefaultWaitSeconds + "), then exit 7; --source files never asks the Editor.",
+            false, new[] { "task", "assignment", "decision", "round", "by", "reason", "wait", "source" }),
         new("status", "status", "The project, its Coordinator data, whether the Unity Editor is reachable and the path of this binary.", false, Array.Empty<string>()),
         new("commands", "commands", "Every command as JSON, for tools.", false, Array.Empty<string>()),
         new("help", "help [<command>]", "This text, or one command.", false, Array.Empty<string>())
@@ -102,7 +105,7 @@ public static partial class McpServer
                     ["exit_codes"] = new JsonObject
                     {
                         ["0"] = "success", ["1"] = "internal error", ["2"] = "usage", ["4"] = "setup missing",
-                        ["6"] = "success=false", ["7"] = "Unity Editor not reachable after the wait"
+                        ["6"] = "success=false", ["7"] = "Unity Editor not reachable with --source editor, or an edit sent without an answer"
                     }
                 }, ExitOk);
             if (root == null)
@@ -141,8 +144,6 @@ public static partial class McpServer
         {
             if (source.Count > 1 || source[0] is not ("auto" or "editor" or "files"))
                 return Fail("usage", "--source is auto, editor or files.", ExitUsage);
-            if (tool == "edit" && source[0] == "files")
-                return Fail("usage", "An edit goes through the Unity Editor; --source files is for queries.", ExitUsage);
             policy = policy with { Source = source[0] };
         }
         var arguments = new JsonObject { ["action"] = positional[1] };
@@ -203,9 +204,10 @@ public static partial class McpServer
         }
         text.AppendLine();
         text.AppendLine("Global: --project <path> (default: the Unity project containing the current folder; a linked git worktree means its main checkout), --pretty (indented JSON).");
-        text.AppendLine($"The Editor: a call waits up to --wait <seconds> (default {DefaultWaitSeconds}) while Unity runs for the project but its bridge does not answer, for example during a recompile. --wait 0 does not wait.");
+        text.AppendLine("The Editor: a call goes to the open Unity Editor when its bridge answers now, otherwise to the Coordinator files at once; the reply's source says which. "
+                        + $"With --source editor a call waits up to --wait <seconds> (default {DefaultWaitSeconds}) while Unity runs for the project but its bridge does not answer.");
         text.AppendLine("A value true or false is a boolean, a .json file or text that starts with { or [ is JSON, anything else is text. --name=value works too.");
-        text.AppendLine("Every reply is one line of JSON with success. Exit codes: 0 success, 1 internal error, 2 usage, 4 setup missing, 6 success=false, 7 Unity Editor not reachable after the wait (an edit, or a query with --source editor).");
+        text.AppendLine("Every reply is one line of JSON with success. Exit codes: 0 success, 1 internal error, 2 usage, 4 setup missing, 6 success=false, 7 Unity Editor not reachable with --source editor, or an edit sent to it without an answer.");
         Console.Out.Write(text.ToString());
         return ExitOk;
     }

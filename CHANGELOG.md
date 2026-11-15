@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Edits without the Editor.** `coordinator-mcp edit` runs the same `CoordinatorAgentApi.Edit` on the Coordinator files when the Editor bridge does not answer, with the same validation and rollback. `approve_task` still refuses. The MCP server's `coordinator_edit` does the same; `coordinator_status` adds `writes_without_editor`.
+- **No queue on one Editor.** By default a read or an edit goes to the files at once when the bridge does not answer now, instead of waiting for a recompile. A busy Editor gets 5 s to start a call (`claim_seconds`); a call it does not start is cancelled there and runs on the files. `--source editor` keeps the wait (`--wait`, default 60). `--source files` now works for edits too.
+- **One writer at a time.** Every edit in the Editor and in the command line holds `Library/Coordinator/write.lock` for the whole change; a second writer waits up to 10 s, then answers `busy` without a change. Generate Cards in the window runs the `generate_cards` edit under the same lock.
+- **The Editor picks up command line edits.** An edit made without the Editor leaves an undo entry in `Library/Coordinator/history-inbox`; the Editor adds it to its Undo history within a second and reloads the window.
+
 ## 0.2.2
 
 - **Coordinator CLI in the Agents window.** The window shows the Coordinator MCP server and the Coordinator CLI as two items with their own tags (MCP, CLI) in the colours of the Architector integrations. The CLI item shows the binary path and version, whether the Editor bridge answers the binary, and copyable examples for a shell and PowerShell. The check runs the binary in the background, so the window opens at once.

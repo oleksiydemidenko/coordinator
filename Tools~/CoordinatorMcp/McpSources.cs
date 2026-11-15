@@ -3,15 +3,21 @@ using System.Net.Sockets;
 using System.Text.Json.Nodes;
 using Coordinator.Editor;
 
-// Where an answer comes from. Every call tries the open Unity Editor first. While Unity runs for the project but its bridge
-// does not answer (a recompile, a domain reload), the call waits for it. A read that still has no Editor is answered
-// from the Coordinator files and git by the package's own model code; an edit always needs the Editor.
+// Where an answer comes from. Every call asks the open Unity Editor first. When its bridge does not answer now (no Editor,
+// a recompile, a domain reload, a busy main thread), the same package code answers on the Coordinator files and git at
+// once, a read and an edit alike: parallel agents never queue on one Editor. One writer at a time is the write lock
+// (CoordinatorWriteLock), which the Editor takes too. --source editor waits for the Editor instead; --source files never asks it.
 public static partial class McpServer
 {
     // A domain reload of a large project keeps the bridge away for about 30 s (28 s measured on christmas-smile-friend), so the
     // default leaves room for a slower one.
     private const int DefaultWaitSeconds = 60;
     private const int RetryMilliseconds = 500;
+
+    // How long the Editor may take to start a request before the call goes to the files. The Editor runs a request only
+    // after it claims it on its main thread; an unclaimed request is cancelled there and never runs, so the files can take
+    // it without a double change. An Editor up to 0.2.2 ignores the field and keeps its own 120 s.
+    private const int ClaimSeconds = 5;
 
     private enum BridgeResult
     {
@@ -100,23 +106,24 @@ public static partial class McpServer
             && arguments["checkout"] == null && arguments["revision"] == null)
             arguments["checkout"] = checkout.Replace('\\', '/');
         if (policy.Source == "files")
-            return tool == "query"
-                ? (Files(arguments, "files were asked for"), string.Empty)
-                : (null, "An edit goes through the Unity Editor; --source files is for queries.");
+            return (Files(tool, arguments, "files were asked for"), string.Empty);
 
         var watch = Stopwatch.StartNew();
-        var result = TryBridge(tool, arguments, out var answer);
+        var claim = policy.Source == "auto" ? ClaimSeconds : (int?)null;
+        var result = TryBridge(tool, arguments, claim, out var answer);
         var waited = false;
-        while (result != BridgeResult.Answered && !(result == BridgeResult.Lost && tool == "edit")
+        while (policy.Source == "editor" && result != BridgeResult.Answered && !(result == BridgeResult.Lost && tool == "edit")
                && watch.Elapsed.TotalSeconds < policy.WaitSeconds && EditorRunning())
         {
             waited = true;
             Thread.Sleep(RetryMilliseconds);
-            result = TryBridge(tool, arguments, out answer);
+            result = TryBridge(tool, arguments, claim, out answer);
         }
         if (result == BridgeResult.Answered)
         {
             var reply = JsonNode.Parse(answer!)!.AsObject();
+            if (claim != null && (string?)reply["code"] == "editor_timeout")
+                return (Files(tool, arguments, $"the Editor did not start the call in {ClaimSeconds} s"), string.Empty);
             reply["source"] = "editor";
             if (waited)
                 reply["waited_seconds"] = Math.Round(watch.Elapsed.TotalSeconds, 1);
@@ -125,26 +132,27 @@ public static partial class McpServer
         if (result == BridgeResult.Lost && tool == "edit")
             return (null, "The Unity Editor took the edit but gave no answer; it may have started a reload. Check the result with a query before you repeat the edit.");
         var running = EditorRunning();
-        var reason = running
+        if (policy.Source == "auto")
+            return (Files(tool, arguments, running ? "the Editor runs but its bridge does not answer now (compiling, reloading or paused)" : "no Unity Editor runs for this project"), string.Empty);
+        return (null, running
             ? $"The Unity Editor runs for this project but its bridge gave no answer in {policy.WaitSeconds} s (compiling, reloading or paused)."
-            : NotRunning;
-        if (tool == "query" && policy.Source == "auto")
-            return (Files(arguments, running ? $"the Editor did not answer in {policy.WaitSeconds} s" : "no Unity Editor runs for this project"), string.Empty);
-        return (null, reason);
+            : NotRunning);
     }
 
-    // A read answered without Unity: the same CoordinatorAgentApi.Query the Editor runs, on the files of this project.
-    private static JsonObject Files(JsonObject arguments, string why)
+    // A call answered without Unity: the same CoordinatorAgentApi the Editor runs, on the files of this project. An edit
+    // takes the write lock and leaves its undo entry for the Editor (CoordinatorHistoryInbox).
+    private static JsonObject Files(string tool, JsonObject arguments, string why)
     {
         CoordinatorGitMemo.FilePath = Path.Combine(root!, "Library", "Coordinator", "git-memo.json");
         var parameters = Newtonsoft.Json.Linq.JObject.Parse(arguments.ToJsonString());
-        var reply = JsonNode.Parse(CoordinatorAgentApi.Query(parameters, root).ToJson())!.AsObject();
+        var result = tool == "edit" ? CoordinatorAgentApi.Edit(parameters, root) : CoordinatorAgentApi.Query(parameters, root);
+        var reply = JsonNode.Parse(result.ToJson())!.AsObject();
         reply["source"] = "files";
         reply["source_reason"] = why;
         return reply;
     }
 
-    private static BridgeResult TryBridge(string tool, JsonNode? arguments, out string? answer)
+    private static BridgeResult TryBridge(string tool, JsonNode? arguments, int? claimSeconds, out string? answer)
     {
         answer = null;
         JsonNode bridge;
@@ -175,7 +183,10 @@ public static partial class McpServer
             using (var writer = new StreamWriter(stream, Utf8) { AutoFlush = true, NewLine = "\n" })
             using (var reader = new StreamReader(stream, Utf8))
             {
-                writer.WriteLine(new JsonObject { ["token"] = (string?)bridge["token"], ["tool"] = tool, ["parameters"] = arguments?.DeepClone() ?? new JsonObject() }.ToJsonString());
+                var request = new JsonObject { ["token"] = (string?)bridge["token"], ["tool"] = tool, ["parameters"] = arguments?.DeepClone() ?? new JsonObject() };
+                if (claimSeconds != null)
+                    request["claim_seconds"] = claimSeconds.Value;
+                writer.WriteLine(request.ToJsonString());
                 answer = reader.ReadLine();
             }
         }

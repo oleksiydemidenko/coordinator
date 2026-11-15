@@ -101,6 +101,11 @@ namespace Coordinator.Editor
                 return CoordinatorAgentResult.Fail("unauthorized", "Wrong bridge token.").ToJson();
             var tool = (string)request["tool"];
             var parameters = request["parameters"] as JObject ?? new JObject();
+            // The command line gives a short claim time: a request the main thread does not start in it is cancelled
+            // here and never runs, and the command line answers it from the files.
+            var claimMilliseconds = (int?)request["claim_seconds"] is { } claimSeconds && claimSeconds > 0
+                ? Math.Min(claimSeconds * 1000, RequestTimeoutMilliseconds)
+                : RequestTimeoutMilliseconds;
             var completion = new TaskCompletionSource<string>();
             var claimed = 0;
             Pending.Enqueue(() =>
@@ -108,7 +113,7 @@ namespace Coordinator.Editor
                 if (Interlocked.Exchange(ref claimed, 1) == 0)
                     completion.SetResult(Run(tool, parameters));
             });
-            if (completion.Task.Wait(RequestTimeoutMilliseconds))
+            if (completion.Task.Wait(claimMilliseconds))
                 return completion.Task.Result;
             if (Interlocked.Exchange(ref claimed, 1) == 0)
                 return CoordinatorAgentResult.Fail("editor_timeout", "The Unity Editor did not start this request, and it was cancelled. It may be compiling or paused without Run In Background.").ToJson();
@@ -144,6 +149,32 @@ namespace Coordinator.Editor
             }
             while (Pending.TryDequeue(out var action))
                 action();
+            ImportCommandLineChanges();
+        }
+
+        private const double InboxCheckSeconds = 1.0;
+        private static double nextInboxCheck;
+
+        // Edits the command line made on the files without the Editor: their undo entries join the history, and the
+        // window reloads. One check of a folder per second.
+        private static void ImportCommandLineChanges()
+        {
+            var now = EditorApplication.timeSinceStartup;
+            if (now < nextInboxCheck)
+                return;
+            nextInboxCheck = now + InboxCheckSeconds;
+            try
+            {
+                var root = CoordinatorAgentApi.DefaultRoot;
+                if (!CoordinatorHistoryInbox.HasEntries(root))
+                    return;
+                foreach (var entry in CoordinatorHistoryInbox.Take(root))
+                    CoordinatorHistory.Import(entry);
+                Changed?.Invoke();
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+            }
         }
 
         private static string NewToken()

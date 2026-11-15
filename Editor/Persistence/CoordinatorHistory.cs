@@ -53,9 +53,36 @@ namespace Coordinator.Editor
             Save();
         }
 
-        public static string Undo() => Move(Current.undo, Current.redo, true);
+        // An edit the command line made without the Editor (CoordinatorHistoryInbox): it joins the history as if made here.
+        public static void Import(CoordinatorHistoryInbox.Entry change)
+        {
+            var entry = new Entry { name = ShortName(change.name) };
+            foreach (var file in change.files)
+                entry.files.Add(new FileChange { path = file.path, before = file.before, after = file.after });
+            if (entry.files.Count == 0 || entry.files.All(file => file.before == file.after))
+                return;
+            Current.undo.Add(entry);
+            if (Current.undo.Count > MaximumEntries)
+                Current.undo.RemoveAt(0);
+            Current.redo.Clear();
+            Save();
+        }
 
-        public static string Redo() => Move(Current.redo, Current.undo, false);
+        public static string Undo() => Locked(() => Move(Current.undo, Current.redo, true));
+
+        public static string Redo() => Locked(() => Move(Current.redo, Current.undo, false));
+
+        private static string Locked(Func<string> move)
+        {
+            try
+            {
+                return CoordinatorWriteLock.Run(CoordinatorAgentApi.DefaultRoot, move);
+            }
+            catch (CoordinatorAgentException exception)
+            {
+                return exception.Message;
+            }
+        }
 
         public static void Clear()
         {
