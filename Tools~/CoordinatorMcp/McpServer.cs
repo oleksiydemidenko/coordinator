@@ -3,10 +3,10 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json.Nodes;
 
-public static class McpServer
+public static partial class McpServer
 {
     private const string ProtocolVersion = "2025-06-18";
-    private const string Instructions = "Coordinator holds this Unity project's parallel tasks: decisions, assignments with exclusive write zones, deliveries and reviews. Everything goes through the open Unity Editor. Start with coordinator_query action capabilities, then board or task. Only a person approves a task; acceptance needs the person who decided it. Executors without Unity read their card with git show and write their delivery file by hand.";
+    private const string Instructions = "Coordinator holds this Unity project's parallel tasks: decisions, assignments with exclusive write zones, deliveries and reviews. Everything goes through the open Unity Editor. Start with coordinator_query action capabilities, then board or task. Only a person approves a task; acceptance needs the person who decided it. Executors without Unity read their card with git show and write their delivery file by hand. With a shell, the same binary is a command line: coordinator_status gives its path (cli); run it with help.";
     private static readonly UTF8Encoding Utf8 = new(false);
     private static string? root;
 
@@ -17,6 +17,9 @@ public static class McpServer
             Console.WriteLine(Version);
             return 0;
         }
+        // With a command among its arguments the binary is the coordinator command line; otherwise an MCP server.
+        if (IsCliInvocation(args))
+            return RunCli(args);
         root = FindProject(args);
         using var input = new StreamReader(Console.OpenStandardInput(), Utf8);
         using var output = new StreamWriter(Console.OpenStandardOutput(), Utf8) { AutoFlush = true, NewLine = "\n" };
@@ -171,7 +174,9 @@ public static class McpServer
             ["version"] = Version,
             ["project"] = root,
             ["has_coordinator"] = root != null && Directory.Exists(Path.Combine(root, "Coordinator")),
-            ["editor_connected"] = root != null && EditorReachable()
+            ["editor_connected"] = root != null && EditorReachable(),
+            ["cli"] = Environment.ProcessPath?.Replace(Path.DirectorySeparatorChar, '/'),
+            ["cli_help"] = "Agents with a shell can run this binary as a command line (help lists the commands); replies are the same JSON."
         }.ToJsonString();
     }
 
@@ -190,11 +195,21 @@ public static class McpServer
         }
     }
 
+    private const string NotRunning = "The Unity Editor is not running for this project, or it is compiling. Open the project and try again. Coordinator works only through the open Editor.";
+
     private static JsonNode Bridge(string tool, JsonNode? arguments)
     {
-        const string notRunning = "The Unity Editor is not running for this project, or it is compiling. Open the project and try again. Coordinator works only through the open Editor.";
+        var answer = BridgeAnswer(tool, arguments);
+        if (answer == null)
+            return Text(NotRunning, true);
+        return Text(answer, !((bool?)JsonNode.Parse(answer)!["success"] ?? false));
+    }
+
+    // The Editor's answer as JSON text, or null when the Editor is not reachable.
+    private static string? BridgeAnswer(string tool, JsonNode? arguments)
+    {
         if (!File.Exists(BridgeState))
-            return Text(notRunning, true);
+            return null;
         try
         {
             var bridge = JsonNode.Parse(File.ReadAllText(BridgeState))!;
@@ -203,14 +218,11 @@ public static class McpServer
             using var writer = new StreamWriter(stream, Utf8) { AutoFlush = true, NewLine = "\n" };
             using var reader = new StreamReader(stream, Utf8);
             writer.WriteLine(new JsonObject { ["token"] = (string?)bridge["token"], ["tool"] = tool, ["parameters"] = arguments?.DeepClone() ?? new JsonObject() }.ToJsonString());
-            var answer = reader.ReadLine();
-            if (answer == null)
-                return Text(notRunning, true);
-            return Text(answer, !((bool?)JsonNode.Parse(answer)!["success"] ?? false));
+            return reader.ReadLine();
         }
         catch (Exception exception) when (exception is SocketException or IOException)
         {
-            return Text(notRunning, true);
+            return null;
         }
     }
 
