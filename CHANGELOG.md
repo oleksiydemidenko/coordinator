@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
 
 - **Coordinator CLI in the Agents window.** The window shows the Coordinator MCP server and the Coordinator CLI as two items with their own tags (MCP, CLI) in the colours of the Architector integrations. The CLI item shows the binary path and version, whether the Editor bridge answers the binary, and copyable examples for a shell and PowerShell. The check runs the binary in the background, so the window opens at once.
 - **The command line waits for the Editor.** While Unity runs for the project but its bridge does not answer (a recompile, a domain reload), `query` and `edit` try again for up to `--wait <seconds>`, default 60 (a domain reload of the game took 28 s), before exit 7. An edit that the Editor took but did not answer is not repeated.
