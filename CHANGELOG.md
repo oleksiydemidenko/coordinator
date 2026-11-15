@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Coordinator CLI in the Agents window.** The window shows the Coordinator MCP server and the Coordinator CLI as two items with their own tags (MCP, CLI) in the colours of the Architector integrations. The CLI item shows the binary path and version, whether the Editor bridge answers the binary, and copyable examples for a shell and PowerShell. The check runs the binary in the background, so the window opens at once.
+- **The command line waits for the Editor.** While Unity runs for the project but its bridge does not answer (a recompile, a domain reload), `query` and `edit` try again for up to `--wait <seconds>`, default 60 (a domain reload of the game took 28 s), before exit 7. An edit that the Editor took but did not answer is not repeated.
+- **Reads without the Editor.** When no Editor answers, `query` answers from the Coordinator files and git with the package's own model code, compiled into the binary from `Editor/` (`Tools~/CoordinatorCore`). Every reply says its `source`: `editor` or `files`. `--source editor|files` picks one. Edits still need the Editor. An Editor test keeps the shared files free of unguarded Unity references, and the server workflow also runs for changes under `Editor/`.
+- **Git worktrees.** Called in a linked worktree, the binary serves the main checkout, where the lead's Editor and the current Coordinator files are. `status` names the worktree as `checkout`; `query scope` without `--checkout` or `--revision` checks it. Executors read their card and check their zone from their worktree with the command line.
+- The MCP server answers `coordinator_query` the same way; `coordinator_status` adds `checkout`, `editor_running`, `reads_without_editor` and `wait_seconds`.
+
 ## 0.2.1
 
 - **Command line.** The server binary is also a command line, like Architector's: `coordinator-mcp status`, `query <action> --<parameter> <value>`, `edit <action> --<parameter> <value|file.json|JSON>`, `commands` and `help`. Each call answers one line of JSON through the same Editor bridge and exits with 0 success, 1 internal error, 2 usage, 4 no Unity project, 6 `success: false` or 7 Editor not reachable. Agents with a shell reach Coordinator without a registered MCP server. Without a command the binary is the MCP server as before; `coordinator_status` adds `cli`, the binary's path.

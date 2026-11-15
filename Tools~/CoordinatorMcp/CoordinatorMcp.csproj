@@ -11,4 +11,11 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- The package's model code answers reads without the Editor. It and Newtonsoft.Json work by reflection, so the
+         trimmer keeps them whole. -->
+    <ProjectReference Include="../CoordinatorCore/CoordinatorCore.csproj" />
+    <TrimmerRootAssembly Include="CoordinatorCore" />
+    <TrimmerRootAssembly Include="Newtonsoft.Json" />
+  </ItemGroup>
 </Project>

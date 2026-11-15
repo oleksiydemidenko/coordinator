@@ -6,7 +6,8 @@ using System.Text.Json.Nodes;
 public static partial class McpServer
 {
     // Exit codes: 0 success, 1 internal error, 2 usage error, 4 setup missing (no Unity project),
-    // 6 the operation answered with success=false, 7 the Unity Editor is not reachable (safe to retry once it is open).
+    // 6 the operation answered with success=false, 7 the Unity Editor is not reachable after the wait (an edit, or a query
+    // with --source editor; safe to retry once it is open).
     private const int ExitOk = 0;
     private const int ExitInternal = 1;
     private const int ExitUsage = 2;
@@ -19,17 +20,22 @@ public static partial class McpServer
     private static readonly CliCommand[] CliCommands =
     {
         new("query", "query <action> [--<parameter> <value>]...",
-            "Any coordinator_query action through the open Unity Editor: capabilities, tasks, board, task, card, validate, scope. "
+            "Any coordinator_query action: capabilities, tasks, board, task, card, validate, scope. "
             + "For example: query board --include_closed false, query task --task SLB-002, query card --task SLB-002 --assignment A1, "
-            + "query scope --task SLB-002 --assignment A1 --checkout F:/path/to/worktree.",
-            true, new[] { "task", "assignment", "checkout", "revision", "include_closed" }),
+            + "query scope --task SLB-002 --assignment A1 --checkout F:/path/to/worktree. "
+            + "The open Unity Editor answers. While Unity runs for the project but does not answer (a recompile, a domain reload), the call waits for it, "
+            + "--wait seconds (default " + DefaultWaitSeconds + "). Without an Editor the same query is answered from the Coordinator files and git; the reply's source is editor or files. "
+            + "--source editor never reads the files, --source files never asks the Editor. "
+            + "In a linked git worktree the project is its main checkout, and scope without --checkout or --revision checks the worktree.",
+            false, new[] { "task", "assignment", "checkout", "revision", "include_closed", "wait", "source" }),
         new("edit", "edit <action> [--<parameter> <value|file.json|JSON>]...",
             "Any coordinator_edit action through the open Unity Editor as the lead: create_task, update_task, set_decision, set_assignment, remove_assignment, "
             + "cancel_assignment, record_review, generate_cards, approve_task. A record parameter (--task for create_task and update_task, --assignment for set_assignment, "
             + "--decision, --round) takes a .json file or JSON text in the format of the coordinator-workflow skill. "
             + "An edit that adds validation errors is rolled back and answers validation_failed with the errors; query validate checks the data without a change. "
-            + "Only a person approves a task, in the Coordinator window.",
-            true, new[] { "task", "assignment", "decision", "round", "by", "reason" }),
+            + "Only a person approves a task, in the Coordinator window. "
+            + "While Unity runs for the project but does not answer, the call waits for it like query (--wait seconds, default " + DefaultWaitSeconds + "); then exit 7.",
+            true, new[] { "task", "assignment", "decision", "round", "by", "reason", "wait" }),
         new("status", "status", "The project, its Coordinator data, whether the Unity Editor is reachable and the path of this binary.", false, Array.Empty<string>()),
         new("commands", "commands", "Every command as JSON, for tools.", false, Array.Empty<string>()),
         new("help", "help [<command>]", "This text, or one command.", false, Array.Empty<string>())
@@ -70,7 +76,7 @@ public static partial class McpServer
         if (positional.Count == 0 || positional[0] is "help" or "--help" or "-h" || options.ContainsKey("help"))
             return Help(positional.Where(word => word is not ("help" or "--help" or "-h")).ToList());
         var project = options.TryGetValue("project", out var projectValues) ? projectValues.Last() : null;
-        root = FindProject(project == null ? Array.Empty<string>() : new[] { "--project", project });
+        root = ResolveProject(FindProject(project == null ? Array.Empty<string>() : new[] { "--project", project }));
         var code = RunCliCommand(positional, options);
         Console.Out.Flush();
         return code;
@@ -96,7 +102,7 @@ public static partial class McpServer
                     ["exit_codes"] = new JsonObject
                     {
                         ["0"] = "success", ["1"] = "internal error", ["2"] = "usage", ["4"] = "setup missing",
-                        ["6"] = "success=false", ["7"] = "Unity Editor not reachable"
+                        ["6"] = "success=false", ["7"] = "Unity Editor not reachable after the wait"
                     }
                 }, ExitOk);
             if (root == null)
@@ -124,10 +130,25 @@ public static partial class McpServer
             return Fail("usage", $"Usage: coordinator-mcp {tool} <action> [--<parameter> <value>]...", ExitUsage);
         if (positional.Count > 2)
             return Fail("usage", $"Unexpected '{positional[2]}'. Parameters are named: coordinator-mcp {tool} {positional[1]} --<parameter> <value>.", ExitUsage);
+        var policy = DefaultPolicy;
+        if (options.TryGetValue("wait", out var wait))
+        {
+            if (wait.Count > 1 || !int.TryParse(wait[0], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var seconds))
+                return Fail("usage", "--wait takes the number of seconds once, for example --wait 0.", ExitUsage);
+            policy = policy with { WaitSeconds = seconds };
+        }
+        if (options.TryGetValue("source", out var source))
+        {
+            if (source.Count > 1 || source[0] is not ("auto" or "editor" or "files"))
+                return Fail("usage", "--source is auto, editor or files.", ExitUsage);
+            if (tool == "edit" && source[0] == "files")
+                return Fail("usage", "An edit goes through the Unity Editor; --source files is for queries.", ExitUsage);
+            policy = policy with { Source = source[0] };
+        }
         var arguments = new JsonObject { ["action"] = positional[1] };
         foreach (var (name, values) in options)
         {
-            if (name is "project" or "pretty")
+            if (name is "project" or "pretty" or "wait" or "source")
                 continue;
             if (values.Count > 1)
                 return Fail("usage", $"--{name} is given {values.Count} times; give it once.", ExitUsage);
@@ -142,10 +163,9 @@ public static partial class McpServer
             }
             arguments[name.Replace('-', '_')] = value;
         }
-        var answer = BridgeAnswer(tool, arguments);
-        if (answer == null)
-            return Fail("editor_unreachable", NotRunning, ExitEditor);
-        var reply = JsonNode.Parse(answer)!;
+        var (reply, reason) = Answer(tool, arguments, policy);
+        if (reply == null)
+            return Fail("editor_unreachable", reason, ExitEditor);
         return Emit(reply, (bool?)reply["success"] == true ? ExitOk : ExitFailed);
     }
 
@@ -182,9 +202,10 @@ public static partial class McpServer
                 text.AppendLine("  Options: " + string.Join(", ", command.Options.Select(option => "--" + option)) + ".");
         }
         text.AppendLine();
-        text.AppendLine("Global: --project <path> (default: the Unity project containing the current folder), --pretty (indented JSON).");
+        text.AppendLine("Global: --project <path> (default: the Unity project containing the current folder; a linked git worktree means its main checkout), --pretty (indented JSON).");
+        text.AppendLine($"The Editor: a call waits up to --wait <seconds> (default {DefaultWaitSeconds}) while Unity runs for the project but its bridge does not answer, for example during a recompile. --wait 0 does not wait.");
         text.AppendLine("A value true or false is a boolean, a .json file or text that starts with { or [ is JSON, anything else is text. --name=value works too.");
-        text.AppendLine("Every reply is one line of JSON with success. Exit codes: 0 success, 1 internal error, 2 usage, 4 setup missing, 6 success=false, 7 Unity Editor not reachable (retry when it is open and not compiling).");
+        text.AppendLine("Every reply is one line of JSON with success. Exit codes: 0 success, 1 internal error, 2 usage, 4 setup missing, 6 success=false, 7 Unity Editor not reachable after the wait (an edit, or a query with --source editor).");
         Console.Out.Write(text.ToString());
         return ExitOk;
     }

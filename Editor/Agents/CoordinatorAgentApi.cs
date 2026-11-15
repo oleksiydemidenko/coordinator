@@ -5,7 +5,9 @@ using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+#if UNITY_EDITOR
 using UnityEngine;
+#endif
 
 namespace Coordinator.Editor
 {
@@ -18,7 +20,12 @@ namespace Coordinator.Editor
             "record_review", "generate_cards", "approve_task"
         };
 
+        // The command line compiles this file without Unity (Tools~/CoordinatorCore): there the project root is always passed in.
+#if UNITY_EDITOR
         public static string DefaultRoot => Directory.GetParent(Application.dataPath)?.FullName ?? Application.dataPath;
+#else
+        public static string DefaultRoot => Directory.GetCurrentDirectory();
+#endif
 
         public static CoordinatorAgentResult Query(JObject parameters, string projectRoot = null)
         {
@@ -476,7 +483,9 @@ namespace Coordinator.Editor
             var introduced = after.Where(diagnostic => diagnostic.IsError && !before.Contains(Key(diagnostic))).ToArray();
             if (introduced.Length == 0)
             {
+#if UNITY_EDITOR
                 CoordinatorHistory.Record(message, backups);
+#endif
                 return CoordinatorAgentResult.Ok(message, new { warnings = Diagnostics(after.Where(diagnostic => !diagnostic.IsError)) });
             }
 

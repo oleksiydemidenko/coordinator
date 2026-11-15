@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
+#if UNITY_EDITOR
 using UnityEngine;
+#endif
 
 namespace Coordinator.Editor
 {
@@ -13,8 +15,13 @@ namespace Coordinator.Editor
         private static Dictionary<string, string> entries;
         private static bool dirty;
 
+#if UNITY_EDITOR
         private static string FilePath =>
             Path.Combine(Directory.GetParent(Application.dataPath)?.FullName ?? Application.dataPath, "Library", "Coordinator", "git-memo.json");
+#else
+        // The command line reads the Editor's memo when the project has one and never writes it: the Editor owns the file.
+        public static string FilePath { get; set; }
+#endif
 
         public static bool TryGet(string key, out string value)
         {
@@ -35,6 +42,7 @@ namespace Coordinator.Editor
         {
             if (!dirty || entries == null)
                 return;
+#if UNITY_EDITOR
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
@@ -44,6 +52,7 @@ namespace Coordinator.Editor
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
             }
+#endif
         }
 
         private static void Load()
@@ -53,7 +62,7 @@ namespace Coordinator.Editor
             entries = new Dictionary<string, string>(StringComparer.Ordinal);
             try
             {
-                if (!File.Exists(FilePath))
+                if (FilePath == null || !File.Exists(FilePath))
                     return;
                 var stored = JsonConvert.DeserializeObject<Dictionary<string, string>>(File.ReadAllText(FilePath));
                 if (stored != null)

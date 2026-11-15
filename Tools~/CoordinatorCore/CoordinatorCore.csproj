@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The package's model, states and queries (Editor/), compiled without Unity so that the command line answers reads
+       from the Coordinator files and git when no Editor is reachable. Files that need Unity stay out; C# 9 as in Unity. -->
+  <PropertyGroup>
+    <TargetFramework>net$([System.Version]::Parse('$(NETCoreSdkVersion)').Major).0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IsTrimmable>false</IsTrimmable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Editor/**/*.cs" Exclude="../../Editor/UI/**;../../Editor/AssemblyInfo.cs;../../Editor/Persistence/CoordinatorHistory.cs;../../Editor/Agents/CoordinatorAgentBridge.cs;../../Editor/Agents/CoordinatorMcpSetup.cs;../../Editor/Agents/CoordinatorServerInstall.cs;../../Editor/Agents/CoordinatorServerMaintenance.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="coordinator-mcp" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+</Project>
