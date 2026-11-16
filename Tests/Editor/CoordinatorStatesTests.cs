@@ -147,6 +147,35 @@ namespace Coordinator.Editor.Tests
         }
 
         [Test]
+        public void AClosedCardNoLongerHoldsItsWriteZone()
+        {
+            Git("checkout", "-q", "-b", "task/door-rules");
+            project.WriteFile("Assets/Scripts/Doors/Door.cs", "class Door {}");
+            Deliver("delivered");
+            var delivered = Git("rev-parse", "HEAD").Trim();
+            Git("checkout", "-q", "develop");
+            Review(delivered, "accepted");
+            project.Assignments.Add(CoordinatorTestProject.Assignment("door-polish", "Assets/Scripts/Doors"));
+            project.Save();
+            Commit("door polish");
+
+            string[] Overlaps() => CoordinatorValidation.Validate(CoordinatorWorkspace.Load(project.Root), git)
+                .Where(diagnostic => diagnostic.Code == "zone_overlap")
+                .Select(diagnostic => diagnostic.Message)
+                .ToArray();
+
+            Assert.That(Overlaps(), Is.Not.Empty);
+
+            Git("branch", "integration/doors", project.Task.baseRevision.commit);
+            MergeInto("integration/doors", "task/door-rules");
+            MergeInto("develop", "integration/doors");
+            Git("branch", "-D", "task/door-rules");
+
+            Assert.That(States().Find("door-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Closed));
+            Assert.That(Overlaps(), Is.Empty);
+        }
+
+        [Test]
         public void AReturnedCardWithoutItsBranchIsNotTreatedAsAccepted()
         {
             Git("checkout", "-q", "-b", "task/door-rules");

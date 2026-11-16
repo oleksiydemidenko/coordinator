@@ -20,12 +20,27 @@ namespace Coordinator.Editor
 
         public static IReadOnlyList<CoordinatorDiagnostic> Validate(CoordinatorWorkspace workspace, CoordinatorGit git)
         {
-            return Validate(workspace, (task, path) => git.PathExists(CoordinatorScope.Base(task), path));
+            var states = new Dictionary<CoordinatorTaskData, CoordinatorTaskStatus>();
+            bool Closed(CoordinatorTaskData data, CoordinatorAssignmentRecord assignment)
+            {
+                if (!states.TryGetValue(data, out var status))
+                    states[data] = status = CoordinatorStates.Compute(data, git);
+                return status.Find(assignment.id)?.State == CoordinatorAssignmentStates.Closed;
+            }
+            return Validate(workspace, (task, path) => git.PathExists(CoordinatorScope.Base(task), path), Closed);
         }
 
         public static IReadOnlyList<CoordinatorDiagnostic> Validate(CoordinatorWorkspace workspace, Func<CoordinatorTaskRecord, string, bool> sourceExists)
         {
-            var context = new Context(workspace, sourceExists);
+            return Validate(workspace, sourceExists, null);
+        }
+
+        private static IReadOnlyList<CoordinatorDiagnostic> Validate(
+            CoordinatorWorkspace workspace,
+            Func<CoordinatorTaskRecord, string, bool> sourceExists,
+            Func<CoordinatorTaskData, CoordinatorAssignmentRecord, bool> closed)
+        {
+            var context = new Context(workspace, sourceExists, closed);
             context.Diagnostics.AddRange(workspace.LoadDiagnostics);
             context.ValidateProject();
             foreach (var task in workspace.Tasks)
@@ -38,14 +53,19 @@ namespace Coordinator.Editor
         {
             private readonly CoordinatorWorkspace workspace;
             private readonly Func<CoordinatorTaskRecord, string, bool> sourceExists;
+            private readonly Func<CoordinatorTaskData, CoordinatorAssignmentRecord, bool> closed;
             private readonly HashSet<string> checkIds;
             private readonly HashSet<string> disciplineIds;
             private readonly HashSet<string> variableIds;
 
-            public Context(CoordinatorWorkspace workspace, Func<CoordinatorTaskRecord, string, bool> sourceExists)
+            public Context(
+                CoordinatorWorkspace workspace,
+                Func<CoordinatorTaskRecord, string, bool> sourceExists,
+                Func<CoordinatorTaskData, CoordinatorAssignmentRecord, bool> closed)
             {
                 this.workspace = workspace;
                 this.sourceExists = sourceExists;
+                this.closed = closed;
                 checkIds = workspace.Project.checks.Select(check => check.id).ToHashSet(StringComparer.Ordinal);
                 disciplineIds = workspace.Project.disciplines.Select(discipline => discipline.id).ToHashSet(StringComparer.Ordinal);
                 variableIds = workspace.Project.variables.Select(variable => variable.id).ToHashSet(StringComparer.Ordinal);
@@ -362,7 +382,7 @@ namespace Coordinator.Editor
             {
                 var open = workspace.Tasks
                     .Where(data => data.Task.cancelled == null)
-                    .SelectMany(data => data.Assignments.Where(assignment => assignment.cancelled == null)
+                    .SelectMany(data => data.Assignments.Where(assignment => assignment.cancelled == null && (closed == null || !closed(data, assignment)))
                         .Select(assignment => (data, assignment)))
                     .ToArray();
                 var architector = workspace.Architector;

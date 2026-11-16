@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **An accepted card keeps its state after its branch is deleted.** States came only from the delivery commits on the executor branch, so a card whose branch was deleted at task close fell back to Ready (or Blocked), though its accepted revision was already in the task or target branch. A closed task then showed all its cards as Ready, their write zones overlapped new cards (`zone_overlap`), and cards that depend on them showed Blocked. When the executor branch does not exist, the state now comes from the last accepted review round whose revision has a delivered delivery file: Accepted, Merged or Closed as before. A returned or unreviewed card without its branch stays Ready. Two tests in `CoordinatorStatesTests`.
+- **A closed card no longer holds its write zone.** The zone overlap check skipped only cancelled cards, so the zones of closed tasks blocked every later card that changes the same files. With git, a card whose accepted revision is in the target branch (Closed) is now left out of `zone_overlap`. Without git (validation from the files only) nothing changes. A test in `CoordinatorStatesTests`.
 
 ## 0.2.4
 
