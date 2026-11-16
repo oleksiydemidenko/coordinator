@@ -124,6 +124,41 @@ namespace Coordinator.Editor.Tests
             Assert.That(States().Find("light-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Ready));
         }
 
+        [Test]
+        public void AnAcceptedCardKeepsItsStateAfterTheExecutorBranchIsDeleted()
+        {
+            Git("checkout", "-q", "-b", "task/door-rules");
+            project.WriteFile("Assets/Scripts/Doors/Door.cs", "class Door {}");
+            Deliver("delivered");
+            var delivered = Git("rev-parse", "HEAD").Trim();
+            Git("checkout", "-q", "develop");
+            Review(delivered.Substring(0, 8), "accepted");
+            Git("branch", "integration/doors", project.Task.baseRevision.commit);
+            MergeInto("integration/doors", "task/door-rules");
+            Git("branch", "-D", "task/door-rules");
+
+            var merged = States().Find("door-rules");
+            Assert.That(merged.State, Is.EqualTo(CoordinatorAssignmentStates.Merged));
+            Assert.That(merged.DeliveredRevision, Is.EqualTo(delivered));
+
+            MergeInto("develop", "integration/doors");
+            Git("branch", "-D", "integration/doors");
+            Assert.That(States().Find("door-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Closed));
+        }
+
+        [Test]
+        public void AReturnedCardWithoutItsBranchIsNotTreatedAsAccepted()
+        {
+            Git("checkout", "-q", "-b", "task/door-rules");
+            Deliver("delivered");
+            var delivered = Git("rev-parse", "HEAD").Trim();
+            Git("checkout", "-q", "develop");
+            Review(delivered, "returned");
+            Git("branch", "-D", "task/door-rules");
+
+            Assert.That(States().Find("door-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Ready));
+        }
+
         private void MergeInto(string target, string source)
         {
             Git("checkout", "-q", target);

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **An accepted card keeps its state after its branch is deleted.** States came only from the delivery commits on the executor branch, so a card whose branch was deleted at task close fell back to Ready (or Blocked), though its accepted revision was already in the task or target branch. A closed task then showed all its cards as Ready, their write zones overlapped new cards (`zone_overlap`), and cards that depend on them showed Blocked. When the executor branch does not exist, the state now comes from the last accepted review round whose revision has a delivered delivery file: Accepted, Merged or Closed as before. A returned or unreviewed card without its branch stays Ready. Two tests in `CoordinatorStatesTests`.
+
 ## 0.2.4
 
 - **Same package as 0.2.3, with server binaries.** The 0.2.3 release build stopped on Linux and macOS: its smoke test held the write lock with a plain open file, which .NET does not see there (it locks with an advisory `flock`). The test now takes a `flock` on those systems. Nothing else changed.

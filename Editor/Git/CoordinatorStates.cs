@@ -165,6 +165,8 @@ namespace Coordinator.Editor
                     break;
                 }
             }
+            if (latest == null && git.Resolve(branch) == null)
+                latest = AcceptedWithoutBranch(data, assignment, path, git, status);
             status.Delivery = latest;
             if (latest == null)
                 return status;
@@ -191,6 +193,31 @@ namespace Coordinator.Editor
                 status.State = CoordinatorAssignmentStates.Delivered;
             Unreviewed(data.Task, status, branch, git);
             return status;
+        }
+
+        private static CoordinatorDeliveryRecord AcceptedWithoutBranch(
+            CoordinatorTaskData data,
+            CoordinatorAssignmentRecord assignment,
+            string path,
+            CoordinatorGit git,
+            CoordinatorAssignmentStatus status)
+        {
+            if (!data.Reviews.TryGetValue(assignment.id, out var review))
+                return null;
+            foreach (var round in Enumerable.Reverse(review.rounds))
+            {
+                if (round.verdict != CoordinatorVerdicts.Accepted)
+                    continue;
+                var commit = git.Resolve(round.revision);
+                if (commit == null)
+                    continue;
+                var delivery = Parse(git.Show(commit, path), out _);
+                if (delivery?.state != CoordinatorDeliveryStates.Delivered)
+                    continue;
+                status.DeliveredRevision = commit;
+                return delivery;
+            }
+            return null;
         }
 
         private static void Unreviewed(CoordinatorTaskRecord task, CoordinatorAssignmentStatus status, string branch, CoordinatorGit git)
