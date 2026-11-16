@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.5
 
 - **Workflow modes: Safe, Free and Lazy.** As in Architector, the person picks with **Mode** in the Coordinator window toolbar how much the lead agent does on its own. The mode is kept per user and project; the Editor mirrors it to `Library/Coordinator/agent-mode.json` when it loads and on every window refresh, and the API reads that file in the Editor and in the command line. No file, or an unknown mode, is Safe. `capabilities` returns `workflow_mode` with the rule for the agent; `status` and `coordinator_status` name the mode.
 - **Lazy mode: the lead agent approves tasks.** `approve_task` approves a draft when the mode is Lazy, `validate` shows nothing for that task (errors and warnings, zones and layers shared with other tasks included) and the call names the agent (`by`) and the person who instructed it (`instructed_by`). The task's `approval` records both (`by`, `instructedBy`), the task card prints them, and `tasks` returns the approval. Otherwise it answers `needs_person` (Safe and Free), `not_clean` with the diagnostics, `already_approved` or `task_cancelled`. Switching to Lazy in the window asks for confirmation. `approve_task` now takes the write lock like every edit.
