@@ -23,19 +23,23 @@ namespace Coordinator.Editor
         private readonly Dictionary<string, CoordinatorArchitectorLayer> byPath = new(StringComparer.Ordinal);
         private readonly HashSet<string> connectedPairs = new(StringComparer.Ordinal);
 
-        private CoordinatorArchitector()
+        private readonly CoordinatorFileSource files;
+
+        private CoordinatorArchitector(CoordinatorFileSource files)
         {
+            this.files = files;
         }
 
         public IReadOnlyCollection<CoordinatorArchitectorLayer> Layers => byId.Values;
         public List<string> Problems { get; } = new();
 
-        public static CoordinatorArchitector Load(string projectRoot)
+        public static CoordinatorArchitector Load(string projectRoot, CoordinatorFileSource files = null)
         {
+            files ??= CoordinatorFileSource.Disk;
             var root = System.IO.Path.Combine(projectRoot, RootFolder);
-            if (!Directory.Exists(System.IO.Path.Combine(root, "Layers")))
+            if (!files.DirectoryExists(System.IO.Path.Combine(root, "Layers")))
                 return null;
-            var architector = new CoordinatorArchitector();
+            var architector = new CoordinatorArchitector(files);
             var groups = new Dictionary<string, (string name, string parent)>(StringComparer.Ordinal);
             foreach (var json in architector.Read(root, "Groups", "*.group.json"))
                 groups[(string)json["id"] ?? string.Empty] = ((string)json["name"] ?? string.Empty, (string)json["parentGroupId"] ?? string.Empty);
@@ -75,14 +79,14 @@ namespace Coordinator.Editor
         private IEnumerable<JObject> Read(string root, string folder, string pattern)
         {
             var directory = System.IO.Path.Combine(root, folder);
-            if (!Directory.Exists(directory))
+            if (!files.DirectoryExists(directory))
                 yield break;
-            foreach (var file in Directory.GetFiles(directory, pattern).OrderBy(path => path, StringComparer.Ordinal))
+            foreach (var file in files.Files(directory, pattern).OrderBy(path => path, StringComparer.Ordinal))
             {
                 JObject json;
                 try
                 {
-                    json = JObject.Parse(File.ReadAllText(file));
+                    json = JObject.Parse(files.ReadText(file));
                 }
                 catch (Exception exception) when (exception is JsonException or IOException)
                 {

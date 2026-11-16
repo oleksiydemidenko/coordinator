@@ -21,25 +21,27 @@ public static partial class McpServer
     {
         new("query", "query <action> [--<parameter> <value>]...",
             "Any coordinator_query action: capabilities, tasks, board, task, card, validate, scope. "
-            + "For example: query board --include_closed false, query task --task SLB-002, query card --task SLB-002 --assignment A1, "
-            + "query scope --task SLB-002 --assignment A1 --checkout F:/path/to/worktree. "
+            + "For example: query board --include_closed false, query board --state Delivered, query task --task SLB-002, query card --task SLB-002 --assignment A1, "
+            + "query scope --task SLB-002 --assignment A1 --checkout F:/path/to/worktree, query validate --task SLB-002. "
+            + "--ref <branch, tag or commit> reads the Coordinator files of that commit instead of the checkout (query board --ref develop); such a read comes from git, never from the Editor. "
             + "The open Unity Editor answers when its bridge answers now; otherwise the same query is answered at once from the Coordinator files and git "
             + "(no Editor, a recompile, a domain reload). The reply's source is editor or files. "
             + "--source editor waits for the Editor instead, --wait seconds (default " + DefaultWaitSeconds + "), and never reads the files; --source files never asks the Editor. "
             + "In a linked git worktree the project is its main checkout, and scope without --checkout or --revision checks the worktree.",
-            false, new[] { "task", "assignment", "checkout", "revision", "include_closed", "wait", "source" }),
+            false, new[] { "task", "assignment", "ref", "state", "checkout", "revision", "include_closed", "wait", "source" }),
         new("edit", "edit <action> [--<parameter> <value|file.json|JSON>]...",
             "Any coordinator_edit action as the lead: create_task, update_task, set_decision, set_assignment, remove_assignment, "
             + "cancel_assignment, record_review, generate_cards, approve_task. A record parameter (--task for create_task and update_task, --assignment for set_assignment, "
             + "--decision, --round) takes a .json file or JSON text in the format of the coordinator-workflow skill. "
             + "An edit that adds validation errors is rolled back and answers validation_failed with the errors; query validate checks the data without a change. "
-            + "Only a person approves a task, in the Coordinator window. "
+            + "approve_task follows the workflow mode a person picks in the Coordinator window: in Lazy mode the lead agent approves a draft whose validate is clean "
+            + "(edit approve_task --task <task> --by <agent> --instructed_by <person>); in Safe and Free mode only a person approves, in the window. "
             + "The open Unity Editor runs the edit when its bridge answers now; otherwise the command line runs the same edit on the Coordinator files at once, "
             + "with the same checks and rollback, and the open Editor takes it into its Undo history and reloads the window. "
             + "One writer at a time: a second writer waits up to 10 s for the write lock, then answers busy. "
             + "--source editor waits for the Editor instead (--wait seconds, default " + DefaultWaitSeconds + "), then exit 7; --source files never asks the Editor.",
-            false, new[] { "task", "assignment", "decision", "round", "by", "reason", "wait", "source" }),
-        new("status", "status", "The project, its Coordinator data, whether the Unity Editor is reachable and the path of this binary.", false, Array.Empty<string>()),
+            false, new[] { "task", "assignment", "decision", "round", "by", "instructed_by", "reason", "wait", "source" }),
+        new("status", "status", "The project, its Coordinator data, whether the Unity Editor is reachable, the workflow mode and the path of this binary.", false, Array.Empty<string>()),
         new("commands", "commands", "Every command as JSON, for tools.", false, Array.Empty<string>()),
         new("help", "help [<command>]", "This text, or one command.", false, Array.Empty<string>())
     };

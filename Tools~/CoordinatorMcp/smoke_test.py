@@ -84,6 +84,7 @@ assert code == 0 and "coordinator-mcp query <action>" in text, text
 code, text = cli("status")
 status = json.loads(text)
 assert code == 0 and status["has_coordinator"] and not status["editor_connected"] and status["cli"], text
+assert status["workflow_mode"] == "safe", text
 code, text = cli("--project", project, "status", cwd=tempfile.gettempdir())
 assert code == 0 and os.path.realpath(json.loads(text)["project"]) == os.path.realpath(project), text
 code, text = cli("commands")
@@ -132,6 +133,29 @@ finally:
     lock.close()
 code, text = cli("edit", "update_task", "--task", json.dumps(dict(record, title="Changed")))
 assert code == 0 and json.load(open(task_file, encoding="utf-8"))["title"] == "Changed", text
+
+# Lazy mode, which the Editor mirrors to Library/Coordinator/agent-mode.json: the lead agent approves a clean draft and the
+# approval names the agent and the person who instructed it. Safe and Free refuse.
+mode_file = os.path.join(project, "Library", "Coordinator", "agent-mode.json")
+with open(mode_file, "w", encoding="utf-8") as file:
+    json.dump({"workflowMode": "free"}, file)
+code, text = cli("edit", "approve_task", "--task", "smoke", "--by", "lead-agent", "--instructed_by", "owner")
+assert code == 6 and json.loads(text)["code"] == "needs_person" and "Free" in json.loads(text)["message"], text
+with open(mode_file, "w", encoding="utf-8") as file:
+    json.dump({"workflowMode": "lazy"}, file)
+code, text = cli("status")
+assert json.loads(text)["workflow_mode"] == "lazy", text
+code, text = cli("query", "capabilities")
+assert code == 0 and json.loads(text)["data"]["workflow_mode"]["agent_may_approve"] is True, text
+code, text = cli("edit", "approve_task", "--task", "smoke", "--by", "lead-agent")
+assert code == 6 and json.loads(text)["code"] == "needs_person", text
+code, text = cli("edit", "approve_task", "--task", "smoke", "--by", "lead-agent", "--instructed-by", "owner")
+assert code == 0 and json.loads(text)["source"] == "files", text
+approval = json.load(open(task_file, encoding="utf-8"))["approval"]
+assert approval["by"] == "lead-agent" and approval["instructedBy"] == "owner", approval
+code, text = cli("query", "validate", "--task", "smoke")
+assert code == 0 and json.loads(text)["data"]["clean"] is True, text
+os.remove(mode_file)
 shutil.rmtree(os.path.join(project, "Coordinator", "Tasks", "smoke"))
 shutil.rmtree(inbox)
 code, text = cli("query", "board", "--wait", "soon")
@@ -160,6 +184,22 @@ if shutil.which("git"):
     status = json.loads(text)
     assert code == 0 and os.path.realpath(status["project"]) == os.path.realpath(project), text
     assert os.path.realpath(status["checkout"]) == os.path.realpath(worktree), text
+    # A read with ref reads that commit's Coordinator files from git, also from the worktree.
+    os.makedirs(os.path.join(project, "Coordinator", "Tasks", "smoke-ref"))
+    with open(os.path.join(project, "Coordinator", "Tasks", "smoke-ref", "task.json"), "w", encoding="utf-8") as file:
+        json.dump(dict(record, id="smoke-ref", integrationBranch="task/smoke-ref"), file)
+    git("add", ".")
+    git("commit", "-q", "-m", "smoke-ref task")
+    shutil.rmtree(os.path.join(project, "Coordinator", "Tasks", "smoke-ref"))
+    code, text = cli("query", "tasks")
+    assert code == 0 and json.loads(text)["data"]["tasks"] == [], text
+    code, text = cli("query", "tasks", "--ref", "HEAD", cwd=worktree)
+    reply = json.loads(text)
+    assert code == 0 and [task["id"] for task in reply["data"]["tasks"]] == ["smoke-ref"] and reply["data"]["at"]["ref"] == "HEAD", text
+    code, text = cli("query", "board", "--ref", "no-such-branch")
+    assert code == 6 and json.loads(text)["code"] == "ref_not_found", text
+    code, text = cli("edit", "generate_cards", "--ref", "HEAD")
+    assert code == 6 and json.loads(text)["code"] == "invalid_parameters", text
 
 # Unity runs for the project, but its bridge answers only after a while, as after a recompile: by default the files answer
 # at once; --source editor waits for the bridge.
@@ -212,6 +252,11 @@ try:
     reply = json.loads(text)
     assert code == 0 and reply["source"] == "files" and "did not start" in reply["source_reason"], text
     thread.join()
+    # A read with ref never asks the Editor, which may be older and ignore ref.
+    if shutil.which("git"):
+        code, text = cli("query", "tasks", "--ref", "HEAD")
+        reply = json.loads(text)
+        assert code == 0 and reply["source"] == "files" and reply["source_reason"] == "a read with ref comes from git", text
 finally:
     unity.kill()
     unity.wait()

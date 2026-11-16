@@ -77,6 +77,7 @@ namespace Coordinator.Editor
 
         private IEnumerator<float> Refresh()
         {
+            CoordinatorWorkflowModePreference.Mirror();
             var git = new CoordinatorGit(ProjectRoot);
             string fingerprint = null;
             var error = Guarded(() =>
@@ -249,11 +250,35 @@ namespace Coordinator.Editor
                     ApproveAll(drafts);
             }
             GUILayout.FlexibleSpace();
+            DrawWorkflowMode();
             if (GUILayout.Button("Agents", EditorStyles.toolbarButton, GUILayout.Width(56f)))
                 CoordinatorAgentsWindow.Open();
             var errors = diagnostics.Count(diagnostic => diagnostic.IsError);
             var warnings = diagnostics.Count - errors;
             showDiagnostics = GUILayout.Toggle(showDiagnostics, $"Diagnostics {errors}/{warnings}", EditorStyles.toolbarButton, GUILayout.Width(110f));
+        }
+
+        // Safe, Free or Lazy: how much the lead agent does on its own. Only Lazy lets it approve tasks.
+        private void DrawWorkflowMode()
+        {
+            var modes = CoordinatorWorkflowModes.All;
+            var current = CoordinatorWorkflowModePreference.Current;
+            var index = 0;
+            for (var candidate = 0; candidate < modes.Count; candidate++)
+                if (modes[candidate].Id == current.Id)
+                    index = candidate;
+            var labels = new GUIContent[modes.Count];
+            for (var candidate = 0; candidate < modes.Count; candidate++)
+                labels[candidate] = new GUIContent("Mode: " + modes[candidate].DisplayName, modes[candidate].Description);
+            var chosen = EditorGUILayout.Popup(index, labels, EditorStyles.toolbarPopup, GUILayout.Width(96f));
+            if (chosen == index)
+                return;
+            var mode = modes[chosen];
+            if (mode.AgentMayApprove && !EditorUtility.DisplayDialog("Lazy Mode",
+                    mode.Description + "\n\nThe lead agent may then approve draft tasks without you.", "Switch to Lazy", "Cancel"))
+                return;
+            CoordinatorWorkflowModePreference.Set(mode);
+            notice = $"Workflow mode: {mode.DisplayName}. {mode.Description}";
         }
 
         private void HandleUndoRedoShortcut()

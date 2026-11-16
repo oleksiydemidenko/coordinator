@@ -26,9 +26,12 @@ namespace Coordinator.Editor
 
     public sealed class CoordinatorWorkspace
     {
-        private CoordinatorWorkspace(CoordinatorPaths paths)
+        private readonly CoordinatorFileSource files;
+
+        private CoordinatorWorkspace(CoordinatorPaths paths, CoordinatorFileSource files)
         {
             Paths = paths;
+            this.files = files;
         }
 
         public CoordinatorPaths Paths { get; }
@@ -39,11 +42,12 @@ namespace Coordinator.Editor
 
         public CoordinatorTaskData FindTask(string id) => Tasks.FirstOrDefault(task => task.Task.id == id);
 
-        public static CoordinatorWorkspace Load(string projectRoot)
+        // files: the checkout on disk by default, or the files of a git commit (CoordinatorTreeSource).
+        public static CoordinatorWorkspace Load(string projectRoot, CoordinatorFileSource files = null)
         {
-            var workspace = new CoordinatorWorkspace(new CoordinatorPaths(projectRoot));
+            var workspace = new CoordinatorWorkspace(new CoordinatorPaths(projectRoot), files ?? CoordinatorFileSource.Disk);
             workspace.LoadAll();
-            workspace.Architector = CoordinatorArchitector.Load(workspace.Paths.ProjectRoot);
+            workspace.Architector = CoordinatorArchitector.Load(workspace.Paths.ProjectRoot, workspace.files);
             foreach (var problem in workspace.Architector?.Problems ?? new List<string>())
                 workspace.LoadDiagnostics.Add(new CoordinatorDiagnostic("architector_unreadable", CoordinatorSeverities.Warning, CoordinatorArchitector.RootFolder, string.Empty, problem));
             return workspace;
@@ -51,11 +55,11 @@ namespace Coordinator.Editor
 
         private void LoadAll()
         {
-            if (File.Exists(Paths.ProjectPath))
+            if (files.FileExists(Paths.ProjectPath))
                 Project = Read<CoordinatorProjectRecord>(Paths.ProjectPath) ?? new CoordinatorProjectRecord();
-            if (!Directory.Exists(Paths.TasksRoot))
+            if (!files.DirectoryExists(Paths.TasksRoot))
                 return;
-            foreach (var folder in Directory.GetDirectories(Paths.TasksRoot).OrderBy(Path.GetFileName, StringComparer.Ordinal))
+            foreach (var folder in files.Directories(Paths.TasksRoot).OrderBy(Path.GetFileName, StringComparer.Ordinal))
                 LoadTask(folder);
         }
 
@@ -63,7 +67,7 @@ namespace Coordinator.Editor
         {
             var folderId = Path.GetFileName(folder);
             var taskPath = Path.Combine(folder, CoordinatorPaths.TaskFile);
-            if (!File.Exists(taskPath))
+            if (!files.FileExists(taskPath))
             {
                 Report("task_file_missing", Paths.RepositoryPath(folder), folderId, $"The task folder has no {CoordinatorPaths.TaskFile}.");
                 return;
@@ -77,9 +81,9 @@ namespace Coordinator.Editor
             Tasks.Add(data);
 
             var reviewPath = Path.Combine(folder, CoordinatorPaths.TaskReviewFile);
-            if (File.Exists(reviewPath))
+            if (files.FileExists(reviewPath))
                 data.TaskReview = Read<CoordinatorTaskReviewRecord>(reviewPath);
-            foreach (var file in Directory.GetFiles(folder, "*.json").OrderBy(Path.GetFileName, StringComparer.Ordinal))
+            foreach (var file in files.Files(folder, "*.json").OrderBy(Path.GetFileName, StringComparer.Ordinal))
             {
                 var name = Path.GetFileName(file);
                 if (name == CoordinatorPaths.TaskFile || name == CoordinatorPaths.TaskReviewFile)
@@ -125,7 +129,7 @@ namespace Coordinator.Editor
         {
             try
             {
-                return CoordinatorJson.Parse<T>(File.ReadAllText(path));
+                return CoordinatorJson.Parse<T>(files.ReadText(path));
             }
             catch (Exception exception) when (exception is JsonException or IOException)
             {

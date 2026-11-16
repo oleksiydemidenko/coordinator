@@ -33,16 +33,19 @@ namespace Coordinator.Editor
             var action = (string)parameters?["action"] ?? string.Empty;
             try
             {
+                if (!QueryActions.Contains(action))
+                    return CoordinatorAgentResult.Fail("unknown_action", "Query actions: " + string.Join(", ", QueryActions) + ".");
+                if (action == "capabilities")
+                    return Capabilities(root);
+                var reading = Reading.Open(root, (string)parameters["ref"]);
                 return action switch
                 {
-                    "capabilities" => Capabilities(),
-                    "tasks" => Tasks(root),
-                    "board" => Board(root, (string)parameters["task"], (bool?)parameters["include_closed"] ?? true),
-                    "task" => Task(root, Required(parameters, "task")),
-                    "card" => Card(root, Required(parameters, "task"), Required(parameters, "assignment")),
-                    "validate" => Validate(root),
-                    "scope" => Scope(root, Required(parameters, "task"), Required(parameters, "assignment"), (string)parameters["checkout"], (string)parameters["revision"]),
-                    _ => CoordinatorAgentResult.Fail("unknown_action", "Query actions: " + string.Join(", ", QueryActions) + ".")
+                    "tasks" => Tasks(reading, (bool?)parameters["include_closed"] ?? true),
+                    "board" => Board(reading, (string)parameters["task"], (bool?)parameters["include_closed"] ?? true, StateFilter((string)parameters["state"])),
+                    "task" => Task(reading, Required(parameters, "task")),
+                    "card" => Card(reading, Required(parameters, "task"), Required(parameters, "assignment")),
+                    "validate" => Validate(reading, (string)parameters["task"]),
+                    _ => Scope(reading, Required(parameters, "task"), Required(parameters, "assignment"), (string)parameters["checkout"], (string)parameters["revision"])
                 };
             }
             catch (CoordinatorAgentException exception)
@@ -61,8 +64,10 @@ namespace Coordinator.Editor
             var action = (string)parameters?["action"] ?? string.Empty;
             try
             {
+                if (parameters?["ref"] != null)
+                    return CoordinatorAgentResult.Fail("invalid_parameters", "Edits change the Coordinator files of this checkout; ref is for reads.");
                 // One writer at a time: the Editor and every command line take the same lock for the whole change.
-                return action == "approve_task" || !EditActions.Contains(action)
+                return !EditActions.Contains(action)
                     ? EditUnlocked(root, action, parameters)
                     : CoordinatorWriteLock.Run(root, () => EditUnlocked(root, action, parameters));
             }
@@ -88,8 +93,7 @@ namespace Coordinator.Editor
                     "record_review" => RecordReview(root, Required(parameters, "task"), Required(parameters, "assignment"),
                         Record<CoordinatorReviewRoundRecord>(parameters, "round")),
                     "generate_cards" => CoordinatorAgentResult.Ok("Cards generated.", new { written = CoordinatorCards.WriteAll(CoordinatorWorkspace.Load(root)) }),
-                    "approve_task" => CoordinatorAgentResult.Fail("needs_person",
-                        "Only a person approves a task, with Approve in the Coordinator window. Ask the user to review the split and approve it."),
+                    "approve_task" => ApproveByAgent(root, parameters),
                     _ => CoordinatorAgentResult.Fail("unknown_action", "Edit actions: " + string.Join(", ", EditActions) + ".")
                 };
             }
@@ -153,6 +157,50 @@ namespace Coordinator.Editor
             return Commit(projectRoot, $"{documents.Count} task(s) approved by {person}.", documents);
         }
 
+        // Lazy mode: the lead agent approves a draft after it checked it again. The workflow mode of this checkout must let
+        // agents approve, validate must show nothing for the task (errors and warnings, its own files and zones shared with
+        // other tasks), and the approval names the agent (by) and the person who instructed it (instructedBy).
+        private static CoordinatorAgentResult ApproveByAgent(string root, JObject parameters)
+        {
+            var mode = CoordinatorWorkflowModes.Read(root);
+            if (!mode.AgentMayApprove)
+                return CoordinatorAgentResult.Fail("needs_person",
+                    $"The workflow mode is {mode.DisplayName}: only a person approves a task, with Approve in the Coordinator window. Ask the user to review the split and approve it. "
+                    + "In Lazy mode, which a person picks in the Coordinator window, the lead agent approves.");
+            var taskId = Required(parameters, "task");
+            var agent = ((string)parameters["by"])?.Trim();
+            var person = ((string)parameters["instructed_by"] ?? (string)parameters["instructedBy"])?.Trim();
+            if (string.IsNullOrEmpty(agent) || string.IsNullOrEmpty(person))
+                return CoordinatorAgentResult.Fail("needs_person", "An agent's approval names the agent (by) and the person who instructed it (instructed_by).");
+            if (string.Equals(agent, person, StringComparison.OrdinalIgnoreCase))
+                return CoordinatorAgentResult.Fail("invalid_parameters", "by names the agent and instructed_by the person who instructed it; they differ. A person approves in the Coordinator window.");
+
+            var workspace = CoordinatorWorkspace.Load(root);
+            var data = workspace.FindTask(taskId) ?? throw new CoordinatorAgentException("task_not_found", $"No task '{taskId}'.");
+            if (data.Task.approval != null)
+                return CoordinatorAgentResult.Fail("already_approved", $"Task '{taskId}' is already approved.");
+            if (data.Task.cancelled != null)
+                return CoordinatorAgentResult.Fail("task_cancelled", $"Task '{taskId}' is cancelled.");
+            var git = Git(root);
+            var found = TaskDiagnostics(Validated(git, workspace), taskId).ToArray();
+            if (found.Length > 0)
+            {
+                var errors = found.Count(diagnostic => diagnostic.IsError);
+                return CoordinatorAgentResult.Fail("not_clean",
+                    $"Approval refused: validate shows {errors} error(s) and {found.Length - errors} warning(s) for task '{taskId}'. Fix them, or ask the user to approve in the Coordinator window.",
+                    new { diagnostics = Diagnostics(found) });
+            }
+            data.Task.approval = new CoordinatorSignatureRecord
+            {
+                by = agent,
+                instructedBy = person,
+                date = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            };
+            RecordSourceRevisions(git, data.Task);
+            return Commit(root, $"Task '{taskId}' approved by {agent}, instructed by {person} (Lazy mode). Regenerate the cards and tell the user.",
+                Documents((TaskFile(root, taskId), data.Task)));
+        }
+
         private static void RecordSourceRevisions(CoordinatorGit git, CoordinatorTaskRecord task)
         {
             if (git == null)
@@ -170,29 +218,30 @@ namespace Coordinator.Editor
             }
         }
 
-        private static CoordinatorAgentResult Capabilities()
+        private static CoordinatorAgentResult Capabilities(string root)
         {
+            var mode = CoordinatorWorkflowModes.Read(root);
             return CoordinatorAgentResult.Ok("Coordinator capabilities.", new
             {
                 schema_version = CoordinatorValidation.SchemaVersion,
                 query_actions = QueryActions,
                 edit_actions = EditActions,
-                assignment_states = new[]
-                {
-                    CoordinatorAssignmentStates.Draft, CoordinatorAssignmentStates.Blocked, CoordinatorAssignmentStates.Ready,
-                    CoordinatorAssignmentStates.InProgress, CoordinatorAssignmentStates.Delivered, CoordinatorAssignmentStates.Returned,
-                    CoordinatorAssignmentStates.Accepted, CoordinatorAssignmentStates.Merged, CoordinatorAssignmentStates.Closed,
-                    CoordinatorAssignmentStates.Cancelled
-                },
+                workflow_mode = CoordinatorWorkflowModes.Json(mode),
+                assignment_states = AssignmentStates,
                 rules = new[]
                 {
                     "Records use the JSON fields of the coordinator-workflow skill; unknown fields are rejected.",
                     "An edit that adds validation errors is rolled back and returns them.",
-                    "Only a person approves a task. approve_task always refuses; the user approves in the Coordinator window.",
+                    "Follow workflow_mode.agent_rule. A person picks the mode in the Coordinator window; never change it yourself.",
+                    mode.AgentMayApprove
+                        ? "Lazy mode: approve_task approves a draft when validate with the task shows nothing; it needs by (your agent name) and instructed_by (the person who gave you the work), and records both."
+                        : "Only a person approves a task, in the Coordinator window: approve_task refuses in this workflow mode (needs_person).",
+                    "Reads take ref (a branch, tag or commit): tasks, board, task, card, validate and scope then read the Coordinator files of that commit, so the lead sees, for example, develop's tasks from a checkout on a task branch. States always come from the branches in git.",
                     "An edit runs in the open Editor when its bridge answers, otherwise in the command line on the Coordinator files, with the same checks. One writer at a time: a second writer waits up to 10 s, then gets busy.",
                     "record_review with verdict accepted needs acceptedBy and instructedBy, the person who decided to accept.",
                     "record_review with verdict accepted runs the scope check on the round's revision against the task branch and records it in checks; a path outside the zone or a reserved path refuses acceptance.",
                     "scope compares the delivered commits with the task branch (merge base to revision); with checkout it also lists uncommitted changes, which are not part of the delivery.",
+                    "validate with task lists only that task's diagnostics, zones shared with other tasks included. A Closed card is history: validation checks that its files read, not that its delivery and checks still match the project file.",
                     "States are computed from git: never write them. Executors write their delivery file in their own branch.",
                     "Approval records in each task source the commit that last changed its file on the target branch. A newer commit marks the task 'requirement changed'; a decided decision whose record names that path and a revision at or after the change answers it, or the lead sets the source's revision with update_task.",
                     "Changing a task after approval keeps the approval; tell the user what changed."
@@ -200,41 +249,101 @@ namespace Coordinator.Editor
             });
         }
 
-        private static CoordinatorAgentResult Tasks(string root)
+        private static readonly string[] AssignmentStates =
         {
-            var workspace = CoordinatorWorkspace.Load(root);
-            var git = Git(root);
+            CoordinatorAssignmentStates.Draft, CoordinatorAssignmentStates.Blocked, CoordinatorAssignmentStates.Ready,
+            CoordinatorAssignmentStates.InProgress, CoordinatorAssignmentStates.Delivered, CoordinatorAssignmentStates.Returned,
+            CoordinatorAssignmentStates.Accepted, CoordinatorAssignmentStates.Merged, CoordinatorAssignmentStates.Closed,
+            CoordinatorAssignmentStates.Cancelled
+        };
+
+        // What a read sees: the Coordinator files of the checkout, or of a commit when the call names ref. States come from
+        // the branches in git either way.
+        private sealed class Reading
+        {
+            public CoordinatorWorkspace Workspace { get; private set; }
+            public CoordinatorGit Git { get; private set; }
+            public string Ref { get; private set; }
+            public string Commit { get; private set; }
+            public object At => Ref == null ? null : new { @ref = Ref, commit = Commit };
+
+            public static Reading Open(string root, string gitRef)
+            {
+                var git = CoordinatorAgentApi.Git(root);
+                if (string.IsNullOrWhiteSpace(gitRef))
+                    return new Reading { Workspace = CoordinatorWorkspace.Load(root), Git = git };
+                if (git == null)
+                    throw new CoordinatorAgentException("not_git", "A read with ref needs git, and this project is not a git repository.");
+                var name = gitRef.Trim();
+                var commit = git.Resolve(name)
+                             ?? throw new CoordinatorAgentException("ref_not_found", $"'{name}' is not a branch, tag or commit in this repository.");
+                var files = git.Tree(commit, new[] { CoordinatorPaths.RootFolder, CoordinatorArchitector.RootFolder }, new[] { ".json" });
+                return new Reading
+                {
+                    Workspace = CoordinatorWorkspace.Load(root, new CoordinatorTreeSource(root, files)),
+                    Git = git,
+                    Ref = name,
+                    Commit = commit
+                };
+            }
+        }
+
+        // "delivered", "Delivered", "in progress", "in_progress" and "inprogress" all name In Progress or Delivered.
+        private static HashSet<string> StateFilter(string states)
+        {
+            if (string.IsNullOrWhiteSpace(states))
+                return null;
+            static string Plain(string text) => new string(text.Where(char.IsLetter).ToArray());
+            var filter = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var state in states.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(state => state.Trim()))
+            {
+                var match = AssignmentStates.FirstOrDefault(candidate => string.Equals(Plain(candidate), Plain(state), StringComparison.OrdinalIgnoreCase))
+                            ?? throw new CoordinatorAgentException("invalid_parameters", $"State '{state}' is not one of: {string.Join(", ", AssignmentStates)}.");
+                filter.Add(match);
+            }
+            return filter;
+        }
+
+        private static CoordinatorAgentResult Tasks(Reading reading, bool includeClosed)
+        {
+            var git = reading.Git;
             return CoordinatorAgentResult.Ok("Coordinator tasks.", new
             {
-                tasks = workspace.Tasks.Select(data =>
-                {
-                    var status = git == null ? null : CoordinatorStates.Compute(data, git);
-                    return new
+                at = reading.At,
+                tasks = reading.Workspace.Tasks
+                    .Select(data => (data, status: git == null ? null : CoordinatorStates.Compute(data, git)))
+                    .Where(item => includeClosed || item.status == null
+                                   || item.status.State != CoordinatorTaskStates.Closed && item.status.State != CoordinatorTaskStates.Cancelled)
+                    .Select(item => new
                     {
-                        id = data.Task.id,
-                        title = data.Task.title,
-                        state = status?.State,
-                        lead = data.Task.lead,
-                        target_branch = data.Task.targetBranch,
-                        assignments = data.Assignments.Count,
-                        open_decisions = data.Task.decisions.Where(decision => decision.state == CoordinatorDecisionStates.Open).Select(decision => decision.id).ToArray(),
-                        requirement_changes = RequirementChanges(status, data.Task)
-                    };
-                }).ToArray()
+                        id = item.data.Task.id,
+                        title = item.data.Task.title,
+                        state = item.status?.State,
+                        lead = item.data.Task.lead,
+                        target_branch = item.data.Task.targetBranch,
+                        approval = Approval(item.data.Task),
+                        assignments = item.data.Assignments.Count,
+                        open_decisions = item.data.Task.decisions.Where(decision => decision.state == CoordinatorDecisionStates.Open).Select(decision => decision.id).ToArray(),
+                        requirement_changes = RequirementChanges(item.status, item.data.Task)
+                    }).ToArray()
             });
         }
 
-        private static CoordinatorAgentResult Board(string root, string taskId, bool includeClosed)
+        private static object Approval(CoordinatorTaskRecord task) =>
+            task.approval == null ? null : new { by = task.approval.by, instructed_by = task.approval.instructedBy, date = task.approval.date };
+
+        private static CoordinatorAgentResult Board(Reading reading, string taskId, bool includeClosed, HashSet<string> states)
         {
-            var workspace = CoordinatorWorkspace.Load(root);
-            var statuses = Statuses(root, workspace);
+            var workspace = reading.Workspace;
+            var statuses = Statuses(reading.Git, workspace);
             return CoordinatorAgentResult.Ok("Coordinator board.", new
             {
+                at = reading.At,
                 columns = CoordinatorBoard.Build(workspace, statuses, taskId, includeClosed).Select(column => new
                 {
                     discipline = column.DisciplineId,
                     title = column.Title,
-                    cards = column.Cards.Select(card => new
+                    cards = column.Cards.Where(card => states == null || states.Contains(card.State)).Select(card => new
                     {
                         task = card.Task.Task.id,
                         assignment = card.Assignment.id,
@@ -247,19 +356,19 @@ namespace Coordinator.Editor
                             : null,
                         executor = card.Assignment.executor?.handle
                     }).ToArray()
-                }).ToArray()
+                }).Where(column => states == null || column.cards.Length > 0).ToArray()
             });
         }
 
-        private static CoordinatorAgentResult Task(string root, string taskId)
+        private static CoordinatorAgentResult Task(Reading reading, string taskId)
         {
-            var workspace = CoordinatorWorkspace.Load(root);
-            var data = workspace.FindTask(taskId) ?? throw new CoordinatorAgentException("task_not_found", $"No task '{taskId}'.");
-            var git = Git(root);
+            var workspace = reading.Workspace;
+            var data = workspace.FindTask(taskId) ?? throw new CoordinatorAgentException("task_not_found", $"No task '{taskId}'{AtText(reading)}.");
+            var git = reading.Git;
             var status = git == null ? null : CoordinatorStates.Compute(data, git);
-            var folder = CoordinatorPaths.RepositoryTaskFolder(taskId) + "/";
             return CoordinatorAgentResult.Ok("Coordinator task.", new
             {
+                at = reading.At,
                 state = status?.State,
                 requirement_changes = RequirementChanges(status, data.Task),
                 task = Json(data.Task),
@@ -277,49 +386,82 @@ namespace Coordinator.Editor
                         problem = assignmentStatus?.Problem
                     };
                 }).ToArray(),
-                diagnostics = Diagnostics(Validated(root, workspace).Where(diagnostic => diagnostic.File.StartsWith(folder, StringComparison.Ordinal)))
+                diagnostics = Diagnostics(TaskDiagnostics(Validated(git, workspace), taskId))
             });
         }
 
-        private static CoordinatorAgentResult Card(string root, string taskId, string assignmentId)
+        private static CoordinatorAgentResult Card(Reading reading, string taskId, string assignmentId)
         {
-            var workspace = CoordinatorWorkspace.Load(root);
-            var data = workspace.FindTask(taskId) ?? throw new CoordinatorAgentException("task_not_found", $"No task '{taskId}'.");
+            var workspace = reading.Workspace;
+            var data = workspace.FindTask(taskId) ?? throw new CoordinatorAgentException("task_not_found", $"No task '{taskId}'{AtText(reading)}.");
             var assignment = data.Assignments.FirstOrDefault(candidate => candidate.id == assignmentId)
-                             ?? throw new CoordinatorAgentException("assignment_not_found", $"Task '{taskId}' has no assignment '{assignmentId}'.");
-            var git = Git(root);
+                             ?? throw new CoordinatorAgentException("assignment_not_found", $"Task '{taskId}' has no assignment '{assignmentId}'{AtText(reading)}.");
+            var git = reading.Git;
             var status = git == null ? null : CoordinatorStates.Compute(data, git).Find(assignmentId);
             data.Reviews.TryGetValue(assignmentId, out var review);
             return CoordinatorAgentResult.Ok("Coordinator card.", new
             {
+                at = reading.At,
                 state = status?.State,
                 blocked_by = status?.BlockedBy.Count > 0 ? status.BlockedBy : null,
                 delivered_revision = status?.DeliveredRevision,
                 delivery_problem = status?.Problem,
                 delivery = status?.Delivery == null ? null : Json(status.Delivery),
                 review = review == null ? null : Json(review),
+                diagnostics = Diagnostics(CardDiagnostics(Validated(git, workspace), taskId, assignmentId)),
                 card = CoordinatorCards.Assignment(workspace.Project, data, assignment, workspace.Architector)
             });
         }
 
-        private static CoordinatorAgentResult Validate(string root)
+        private static CoordinatorAgentResult Validate(Reading reading, string taskId)
         {
-            var workspace = CoordinatorWorkspace.Load(root);
-            var diagnostics = Validated(root, workspace);
-            return CoordinatorAgentResult.Ok("Coordinator validation.", new
+            var workspace = reading.Workspace;
+            var one = !string.IsNullOrWhiteSpace(taskId);
+            if (one && workspace.FindTask(taskId) == null)
+                throw new CoordinatorAgentException("task_not_found", $"No task '{taskId}'{AtText(reading)}.");
+            var all = Validated(reading.Git, workspace);
+            var diagnostics = one ? TaskDiagnostics(all, taskId).ToArray() : all;
+            return CoordinatorAgentResult.Ok(one ? $"Coordinator validation of task '{taskId}'." : "Coordinator validation.", new
             {
+                at = reading.At,
+                task = one ? taskId : null,
+                clean = diagnostics.Count == 0,
                 errors = diagnostics.Count(diagnostic => diagnostic.IsError),
                 warnings = diagnostics.Count(diagnostic => !diagnostic.IsError),
                 diagnostics = Diagnostics(diagnostics)
             });
         }
 
-        private static CoordinatorAgentResult Scope(string root, string taskId, string assignmentId, string checkout, string revision)
+        private static string AtText(Reading reading) => reading.Ref == null ? string.Empty : $" at {reading.Ref}";
+
+        // A task's diagnostics: those in its own files, and those of zones and layers it shares with another task, which
+        // are reported on the file of whichever assignment comes first ("... of <task>/<assignment>").
+        private static IEnumerable<CoordinatorDiagnostic> TaskDiagnostics(IEnumerable<CoordinatorDiagnostic> diagnostics, string taskId)
         {
-            var workspace = CoordinatorWorkspace.Load(root);
-            var data = workspace.FindTask(taskId) ?? throw new CoordinatorAgentException("task_not_found", $"No task '{taskId}'.");
+            var folder = CoordinatorPaths.RepositoryTaskFolder(taskId) + "/";
+            var mention = " " + taskId + "/";
+            return diagnostics.Where(diagnostic => diagnostic.File.StartsWith(folder, StringComparison.Ordinal)
+                                                   || diagnostic.Code is "zone_overlap" or "layer_shared" or "layers_connected"
+                                                   && diagnostic.Message.Contains(mention));
+        }
+
+        // One card's diagnostics: its assignment, delivery and review files, and zones and layers it shares with other cards.
+        private static IEnumerable<CoordinatorDiagnostic> CardDiagnostics(IEnumerable<CoordinatorDiagnostic> diagnostics, string taskId, string assignmentId)
+        {
+            var prefix = CoordinatorPaths.RepositoryTaskFolder(taskId) + "/" + assignmentId + ".";
+            var mention = " " + taskId + "/" + assignmentId + ".";
+            var mentionEnd = " " + taskId + "/" + assignmentId + ";";
+            return diagnostics.Where(diagnostic => diagnostic.File.StartsWith(prefix, StringComparison.Ordinal)
+                                                   || diagnostic.Code is "zone_overlap" or "layer_shared" or "layers_connected"
+                                                   && (diagnostic.Message.Contains(mention) || diagnostic.Message.Contains(mentionEnd)));
+        }
+
+        private static CoordinatorAgentResult Scope(Reading reading, string taskId, string assignmentId, string checkout, string revision)
+        {
+            var workspace = reading.Workspace;
+            var data = workspace.FindTask(taskId) ?? throw new CoordinatorAgentException("task_not_found", $"No task '{taskId}'{AtText(reading)}.");
             var assignment = data.Assignments.FirstOrDefault(candidate => candidate.id == assignmentId)
-                             ?? throw new CoordinatorAgentException("assignment_not_found", $"Task '{taskId}' has no assignment '{assignmentId}'.");
+                             ?? throw new CoordinatorAgentException("assignment_not_found", $"Task '{taskId}' has no assignment '{assignmentId}'{AtText(reading)}.");
             var commands = CoordinatorScope.Commands(workspace.Project, data.Task, assignment, workspace.Architector);
             CoordinatorGit git;
             if (!string.IsNullOrEmpty(checkout))
@@ -331,13 +473,13 @@ namespace Coordinator.Editor
             }
             else
             {
-                git = Git(root);
+                git = reading.Git;
                 if (git != null && string.IsNullOrEmpty(revision))
                     revision = CoordinatorStates.Compute(data, git).Find(assignmentId)?.DeliveredRevision;
             }
             if (git == null || string.IsNullOrEmpty(revision))
                 return CoordinatorAgentResult.Ok("Scope commands; each prints nothing when the commits are inside the zone. Nothing is delivered yet to check.",
-                    new { commands, uncommitted_command = CoordinatorScope.UncommittedCommand });
+                    new { at = reading.At, commands, uncommitted_command = CoordinatorScope.UncommittedCommand });
 
             var delivered = CoordinatorScope.Check(git, workspace.Project, data.Task, assignment, revision, workspace.Architector);
             var uncommitted = string.IsNullOrEmpty(checkout) ? null : CoordinatorScope.Uncommitted(git, workspace.Project, data.Task, assignment, workspace.Architector);
@@ -345,6 +487,7 @@ namespace Coordinator.Editor
                           + (uncommitted == null ? "" : uncommitted.Clean ? " Nothing is uncommitted." : " The checkout has uncommitted changes; they are not part of the delivery.");
             return CoordinatorAgentResult.Ok(message, new
             {
+                at = reading.At,
                 clean = delivered.Clean,
                 delivered = ScopeJson(delivered),
                 uncommitted = uncommitted == null ? null : new { inside_zone = uncommitted.InsideZone, outside_zone = uncommitted.OutsideZone },
@@ -512,14 +655,14 @@ namespace Coordinator.Editor
         private static CoordinatorAgentResult Commit(string root, string message, IReadOnlyDictionary<string, object> documents, IEnumerable<string> deletions = null)
         {
             var removed = (deletions ?? Enumerable.Empty<string>()).ToArray();
-            var before = ErrorKeys(Validated(root, CoordinatorWorkspace.Load(root)));
+            var before = ErrorKeys(Validated(Git(root), CoordinatorWorkspace.Load(root)));
             var backups = documents.Keys.Concat(removed).Distinct().ToDictionary(path => path, path => File.Exists(path) ? File.ReadAllText(path) : null);
             foreach (var document in documents)
                 CoordinatorJson.Write(document.Key, document.Value);
             foreach (var path in removed.Where(File.Exists))
                 File.Delete(path);
 
-            var after = Validated(root, CoordinatorWorkspace.Load(root));
+            var after = Validated(Git(root), CoordinatorWorkspace.Load(root));
             var introduced = after.Where(diagnostic => diagnostic.IsError && !before.Contains(Key(diagnostic))).ToArray();
             if (introduced.Length == 0)
             {
@@ -567,15 +710,13 @@ namespace Coordinator.Editor
             return id;
         }
 
-        private static IReadOnlyList<CoordinatorDiagnostic> Validated(string root, CoordinatorWorkspace workspace)
+        private static IReadOnlyList<CoordinatorDiagnostic> Validated(CoordinatorGit git, CoordinatorWorkspace workspace)
         {
-            var git = Git(root);
             return git == null ? CoordinatorValidation.Validate(workspace) : CoordinatorValidation.Validate(workspace, git);
         }
 
-        private static Dictionary<string, CoordinatorTaskStatus> Statuses(string root, CoordinatorWorkspace workspace)
+        private static Dictionary<string, CoordinatorTaskStatus> Statuses(CoordinatorGit git, CoordinatorWorkspace workspace)
         {
-            var git = Git(root);
             var statuses = new Dictionary<string, CoordinatorTaskStatus>(StringComparer.Ordinal);
             if (git != null)
                 foreach (var data in workspace.Tasks)

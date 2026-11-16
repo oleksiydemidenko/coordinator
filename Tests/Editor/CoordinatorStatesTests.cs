@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 
 namespace Coordinator.Editor.Tests
@@ -173,6 +174,48 @@ namespace Coordinator.Editor.Tests
 
             Assert.That(States().Find("door-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Closed));
             Assert.That(Overlaps(), Is.Empty);
+        }
+
+        [Test]
+        public void TheDeliveryOfAClosedCardIsHistoryAndItsOldReferencesAreNotErrors()
+        {
+            Git("checkout", "-q", "-b", "task/door-rules");
+            project.WriteFile("Assets/Scripts/Doors/Door.cs", "class Door {}");
+            CoordinatorJson.Write(Path.Combine(project.Root, CoordinatorPaths.RepositoryDeliveryPath("doors", "door-rules")),
+                new CoordinatorDeliveryRecord
+                {
+                    assignment = "door-rules",
+                    state = CoordinatorDeliveryStates.Delivered,
+                    checks = new List<CoordinatorCheckResultRecord> { new() { acceptance = "compile", command = "compile", exitCode = 0, result = "ok" } },
+                    unverified = new List<CoordinatorUnverifiedRecord> { new() { acceptance = "scope", text = "Not run." } }
+                });
+            Commit("door delivered");
+            var delivered = Git("rev-parse", "HEAD").Trim();
+
+            string[] References() => CoordinatorValidation.Validate(CoordinatorWorkspace.Load(project.Root), git)
+                .Where(diagnostic => diagnostic.Code == "unknown_acceptance")
+                .Select(diagnostic => diagnostic.Message)
+                .ToArray();
+
+            Assert.That(References(), Has.Length.EqualTo(2));
+            Assert.That(References()[0], Does.Contain("'compile' is a project check: name it with check, not acceptance."));
+            Assert.That(References()[1], Does.Contain("an unverified item names an acceptance item of the card"));
+            var card = JObject.Parse(CoordinatorAgentApi.Query(JObject.FromObject(new { action = "card", task = "doors", assignment = "door-rules" }), project.Root).ToJson());
+            Assert.That(card["data"]["diagnostics"].Select(item => (string)item["code"]), Is.EqualTo(new[] { "unknown_acceptance", "unknown_acceptance" }),
+                "The lead sees the delivery's errors when reviewing the card.");
+
+            Git("checkout", "-q", "develop");
+            Review(delivered, "accepted");
+            Git("branch", "integration/doors", project.Task.baseRevision.commit);
+            MergeInto("integration/doors", "task/door-rules");
+            MergeInto("develop", "integration/doors");
+            Git("branch", "-D", "task/door-rules");
+
+            Assert.That(States().Find("door-rules").State, Is.EqualTo(CoordinatorAssignmentStates.Closed));
+            Assert.That(File.Exists(Path.Combine(project.Root, CoordinatorPaths.RepositoryDeliveryPath("doors", "door-rules"))), Is.True);
+            Assert.That(References(), Is.Empty);
+            Assert.That(CoordinatorValidation.Validate(CoordinatorWorkspace.Load(project.Root)).Count(diagnostic => diagnostic.Code == "unknown_acceptance"),
+                Is.EqualTo(2), "Without git no card is known to be Closed, so nothing changes there.");
         }
 
         [Test]

@@ -303,18 +303,24 @@ namespace Coordinator.Editor
                 }
                 if (delivery.state != CoordinatorDeliveryStates.InProgress && delivery.state != CoordinatorDeliveryStates.Delivered)
                     Error("delivery_state", file, delivery.assignment, $"Delivery state '{delivery.state}' is not inProgress or delivered.");
+                // A Closed card is history: its accepted revision is in the target branch and its executor branch is gone, so
+                // nobody can change the report. Only its form is checked, not whether its references still match.
+                if (closed != null && closed(data, assignment))
+                    return;
                 var acceptanceIds = assignment.acceptance.Select(acceptance => acceptance.id).ToHashSet(StringComparer.Ordinal);
                 foreach (var check in delivery.checks)
                 {
                     if (check.acceptance != null && !acceptanceIds.Contains(check.acceptance))
-                        Error("unknown_acceptance", file, delivery.assignment, $"Check result for acceptance '{check.acceptance}', which the assignment does not declare.");
+                        Error("unknown_acceptance", file, delivery.assignment, $"Check result for acceptance '{check.acceptance}', which the assignment does not declare."
+                                                                              + ProjectCheckHint(check.acceptance, "check"));
                     if (check.check != null && !checkIds.Contains(check.check))
                         Error("unknown_check", file, delivery.assignment, $"Check result for '{check.check}', which the project file does not declare.");
                     if (check.acceptance == null && check.check == null)
                         Error("check_without_reference", file, delivery.assignment, "A check result names its acceptance item or project check.");
                 }
                 foreach (var unverified in delivery.unverified.Where(item => item.acceptance != null && !acceptanceIds.Contains(item.acceptance)))
-                    Error("unknown_acceptance", file, delivery.assignment, $"Unverified item for acceptance '{unverified.acceptance}', which the assignment does not declare.");
+                    Error("unknown_acceptance", file, delivery.assignment, $"Unverified item for acceptance '{unverified.acceptance}', which the assignment does not declare."
+                                                                          + ProjectCheckHint(unverified.acceptance, "text"));
                 foreach (var judgment in delivery.judgments)
                 {
                     if (string.IsNullOrWhiteSpace(judgment.text) || string.IsNullOrWhiteSpace(judgment.reason))
@@ -323,6 +329,12 @@ namespace Coordinator.Editor
                         Error("judgment_step", file, delivery.assignment, $"Judgment names route step {step}; the route has {assignment.route.Count} steps.");
                 }
             }
+
+            // Executors often put a project check id where the card's acceptance id belongs.
+            private string ProjectCheckHint(string id, string field) =>
+                !checkIds.Contains(id) ? string.Empty
+                : field == "check" ? $" '{id}' is a project check: name it with check, not acceptance."
+                : $" '{id}' is a project check: an unverified item names an acceptance item of the card, or only its text.";
 
             private void ValidateReview(CoordinatorTaskData data, CoordinatorReviewRecord review)
             {

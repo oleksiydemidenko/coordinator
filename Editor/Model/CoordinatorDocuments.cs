@@ -140,6 +140,9 @@ namespace Coordinator.Editor
     {
         public string by = string.Empty;
         public string date = string.Empty;
+
+        // Set when an agent approved in Lazy mode: by is the agent, instructedBy the person who instructed it.
+        public string instructedBy;
     }
 
     [Serializable]

@@ -52,7 +52,9 @@ namespace Coordinator.Editor
             text.Line($"Task `{task.id}`. Lead: {task.lead}. Target branch `{task.targetBranch}`"
                       + (string.IsNullOrEmpty(task.integrationBranch) ? "" : $", integration branch `{task.integrationBranch}`")
                       + $". Base `{task.baseRevision.branch}`" + (string.IsNullOrEmpty(task.baseRevision.commit) ? "." : $" (`{Short(task.baseRevision.commit)}`)."));
-            text.Line(task.approval == null ? "Not approved yet: assignments do not start." : $"Approved by {task.approval.by} on {task.approval.date}.");
+            text.Line(task.approval == null ? "Not approved yet: assignments do not start."
+                : string.IsNullOrEmpty(task.approval.instructedBy) ? $"Approved by {task.approval.by} on {task.approval.date}."
+                : $"Approved by {task.approval.by}, instructed by {task.approval.instructedBy}, on {task.approval.date}.");
             if (task.cancelled != null)
                 text.Line($"Cancelled by {task.cancelled.by} on {task.cancelled.date}: {task.cancelled.reason}");
             if (task.sources.Count > 0)

@@ -6,7 +6,7 @@ using System.Text.Json.Nodes;
 public static partial class McpServer
 {
     private const string ProtocolVersion = "2025-06-18";
-    private const string Instructions = "Coordinator holds this Unity project's parallel tasks: decisions, assignments with exclusive write zones, deliveries and reviews. Reads and edits go to the open Unity Editor when it answers, otherwise the same code runs on the Coordinator files and git (the reply says its source); one writer at a time. Start with coordinator_query action capabilities, then board or task. Only a person approves a task; acceptance needs the person who decided it. Executors in a git worktree read their card with the command line (query card answers for the main checkout) or with git show, and write their delivery file by hand. With a shell, the same binary is a command line: coordinator_status gives its path (cli); run it with help.";
+    private const string Instructions = "Coordinator holds this Unity project's parallel tasks: decisions, assignments with exclusive write zones, deliveries and reviews. Reads and edits go to the open Unity Editor when it answers, otherwise the same code runs on the Coordinator files and git (the reply says its source); one writer at a time. Start with coordinator_query action capabilities, then board or task; reads take ref (for example develop) to read the Coordinator files of that commit. Follow the workflow mode in capabilities: only in Lazy mode may the lead agent approve a task; otherwise a person approves. Acceptance needs the person who decided it. Executors in a git worktree read their card with the command line (query card answers for the main checkout) or with git show, and write their delivery file by hand. With a shell, the same binary is a command line: coordinator_status gives its path (cli); run it with help.";
     private static readonly UTF8Encoding Utf8 = new(false);
     private static string? root;
 
@@ -98,15 +98,17 @@ public static partial class McpServer
     {
         return new JsonArray(
             Tool("coordinator_status", "Report the Unity project this server serves, whether it has Coordinator data and whether the Unity Editor is reachable.", Schema(new JsonObject())),
-            Tool("coordinator_query", "Read tasks, the board, one task, one assignment card, validation or scope, from the open Unity Editor or the Coordinator files. Call action capabilities first.", ActionSchema(
+            Tool("coordinator_query", "Read tasks, the board, one task, one assignment card, validation or scope, from the open Unity Editor or the Coordinator files, or with ref from any commit. Call action capabilities first: it has the workflow mode.", ActionSchema(
                 new[] { "capabilities", "tasks", "board", "task", "card", "validate", "scope" },
                 new JsonObject
                 {
-                    ["task"] = TextParameter("Task id."),
+                    ["task"] = TextParameter("Task id; for board and validate, only that task."),
                     ["assignment"] = TextParameter("Assignment id."),
+                    ["ref"] = TextParameter("A branch, tag or commit: read the Coordinator files of that commit instead of the checkout, for example develop. States still come from the branches in git."),
+                    ["state"] = TextParameter("For board: only cards in these states, comma-separated, for example \"Delivered,Accepted\"."),
                     ["checkout"] = TextParameter("For scope: absolute path of an executor's checkout; its HEAD commits are checked against the task branch and its uncommitted changes are listed."),
                     ["revision"] = TextParameter("For scope without checkout: the commit to check; default the assignment's delivered revision."),
-                    ["include_closed"] = new JsonObject { ["type"] = "boolean", ["description"] = "For board; default true." }
+                    ["include_closed"] = new JsonObject { ["type"] = "boolean", ["description"] = "For board and tasks; default true." }
                 })),
             Tool("coordinator_edit", "Change tasks as the lead, in the open Unity Editor or, without it, on the Coordinator files. Records use the JSON format of the coordinator-workflow skill; an edit that adds validation errors is rolled back.", ActionSchema(
                 new[] { "create_task", "update_task", "set_decision", "set_assignment", "remove_assignment", "cancel_assignment", "record_review", "generate_cards", "approve_task" },
@@ -116,7 +118,8 @@ public static partial class McpServer
                     ["assignment"] = new JsonObject { ["description"] = "Assignment id, or for set_assignment the assignment record." },
                     ["decision"] = new JsonObject { ["type"] = "object", ["description"] = "Decision record for set_decision." },
                     ["round"] = new JsonObject { ["type"] = "object", ["description"] = "Review round for record_review." },
-                    ["by"] = TextParameter("Who cancels, for cancel_assignment."),
+                    ["by"] = TextParameter("Who cancels, for cancel_assignment; for approve_task in Lazy mode, the agent that approves."),
+                    ["instructed_by"] = TextParameter("For approve_task in Lazy mode: the person who instructed the agent."),
                     ["reason"] = TextParameter("Why, for cancel_assignment.")
                 })));
     }
@@ -180,6 +183,7 @@ public static partial class McpServer
             ["reads_without_editor"] = true,
             ["writes_without_editor"] = true,
             ["wait_seconds"] = DefaultWaitSeconds,
+            ["workflow_mode"] = root == null ? null : Coordinator.Editor.CoordinatorWorkflowModes.Read(root).Id,
             ["cli"] = Environment.ProcessPath?.Replace(Path.DirectorySeparatorChar, '/'),
             ["cli_help"] = "Agents with a shell can run this binary as a command line (help lists the commands); replies are the same JSON."
         }.ToJsonString();

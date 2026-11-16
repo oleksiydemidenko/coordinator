@@ -107,6 +107,10 @@ public static partial class McpServer
             arguments["checkout"] = checkout.Replace('\\', '/');
         if (policy.Source == "files")
             return (Files(tool, arguments, "files were asked for"), string.Empty);
+        // A read at a git ref needs no Editor: it reads that commit from git. An Editor before 0.2.5 would ignore ref and
+        // answer for its checkout, so the command line never asks it.
+        if (tool == "query" && arguments["ref"] is JsonValue && policy.Source == "auto")
+            return (Files(tool, arguments, "a read with ref comes from git"), string.Empty);
 
         var watch = Stopwatch.StartNew();
         var claim = policy.Source == "auto" ? ClaimSeconds : (int?)null;
